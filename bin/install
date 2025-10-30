@@ -1574,19 +1574,21 @@ show_post_install_info() {
     
     echo -e "${GREEN}✅ Red Hat Secrets Store CSI Driver Operator installed${NC}"
     echo -e "${GREEN}✅ Azure Key Vault Provider installed${NC}"
-    echo -e "${GREEN}✅ Test resources created${NC}"
-    echo -e "${GREEN}✅ SecretProviderClasses created${NC}"
+    if [[ "$INSTALL_ESO" == "true" ]]; then
+        echo -e "${GREEN}✅ External Secrets Operator installed${NC}"
+    fi
     echo ""
     echo -e "${BLUE}Next Steps:${NC}"
-    echo "1. Run examples: ./bin/examples-optimized list"
-    echo "2. Apply an example: ./bin/examples-optimized apply basic-secret-sync"
-    echo "3. Test an example: ./bin/examples-optimized test basic-secret-sync"
-    echo "4. Deploy webapps: ./hello-world-app/deploy-optimized.sh"
+    echo "1. Create test resources: ./bin/examples apply basic-secret-sync"
+    echo "2. Deploy webapps: ./hello-world-app/deploy.sh deploy <app-type>"
+    echo "3. Run examples: ./bin/examples list"
     echo ""
     echo -e "${BLUE}Useful Commands:${NC}"
-    echo "  oc get secretproviderclass -n ${TEST_NAMESPACE}"
     echo "  oc get pods -n ${NAMESPACE}"
     echo "  oc logs -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure"
+    if [[ "$INSTALL_ESO" == "true" ]]; then
+        echo "  oc get pods -n external-secrets"
+    fi
 }
 
 # Force delete resources with finalizers
@@ -2690,11 +2692,7 @@ fi
             install_external_secrets_operator
         fi
         
-        # Only create test resources if SSCSI is installed
-        if [[ "$INSTALL_SSCSI" == "true" ]]; then
-        create_test_resources
-        create_secretproviderclasses
-        fi
+        # Test resources are created separately via examples or webapp deployment
         
         validate_installation
         show_post_install_info
