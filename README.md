@@ -61,13 +61,13 @@ This creates:
 
 ```bash
 # Install SSCSI operator + Azure provider (default)
-./bin/install install
+./bin/install operator
 
 # Install External Secrets Operator only
-./bin/install install --eso
+./bin/install operator --eso
 
 # Install everything
-./bin/install install --all
+./bin/install operator --all
 
 # Validate installation
 ./bin/install validate
@@ -218,11 +218,6 @@ export SERVICE_PRINCIPAL_CLIENT_SECRET="your-client-secret"
 export AZURE_RESOURCE_PREFIX="aro-secrets-"
 export KEYVAULT_NAME="akv-01"
 export SERVICE_PRINCIPAL_NAME="csi-driver-sp"
-
-# Kubernetes Configuration
-export OPERATOR_NAMESPACE="openshift-cluster-csi-drivers"
-export NAMESPACE="openshift-cluster-csi-drivers"
-export TEST_NAMESPACE="secrets-store-test"
 ```
 
 **Auto-fetched values**:
@@ -254,122 +249,31 @@ export TEST_NAMESPACE="secrets-store-test"
 
 ## Monitoring Dashboards
 
-### 1. Security & Compliance Dashboard
-**Enterprise-grade security monitoring and compliance reporting**
+This project includes 12 monitoring dashboards that demonstrate different secret management patterns and capabilities:
 
-**Features:**
-- **Compliance Scoring**: Real-time compliance assessment with risk levels
-- **Secret Analysis**: Password strength validation and security rule enforcement
-- **Rotation Monitoring**: Tracks secret rotation status and overdue alerts
-- **Violation Detection**: Identifies policy violations and security issues
-- **Recommendations**: Actionable security recommendations and remediation steps
-- **Audit Trail**: Comprehensive logging and access pattern analysis
+- **Security & Compliance Dashboard**: Security monitoring and compliance tracking
+- **Audit Dashboard**: Secret access audit and analytics
+- **Validation Checker**: Secret format validation and compliance
+- **Versioning Dashboard**: Secret versioning and history tracking
+- **Expiration Monitor**: Secret expiration monitoring and alerts
+- **Certificate TLS Dashboard**: Certificate-based TLS management
+- **Hot Reload Dashboard**: Real-time secret updates without pod restarts
+- **Rotation Handler**: Secret rotation monitoring and management
+- **Multi-Vault Dashboard**: Multi-vault secret access and management
+- **Selective Sync Dashboard**: Selective secret synchronization
+- **Cross-Namespace Dashboard**: Cross-namespace secret access patterns
+- **External Secrets Redhat Dashboard**: Red Hat External Secrets Operator integration
 
-**Security Rules:**
-- Password policy enforcement (length, complexity, character requirements)
-- Secret rotation policies and age-based alerts
-- Access control validation and permission auditing
-- Compliance reporting across multiple security frameworks
+### Quick Start
 
-### 2. Audit Dashboard
-**Secret access audit and analytics**
+```bash
+cd hello-world-app
+./deploy.sh                    # Deploy all dashboards
+./deploy.sh deploy security-dashboard  # Deploy specific dashboard
+./deploy.sh urls               # View dashboard URLs
+```
 
-**Features:**
-- **Access Tracking**: Real-time monitoring of secret access patterns
-- **Analytics**: Access frequency, trends, and usage statistics
-- **Compliance**: Audit trail for security and compliance requirements
-- **Alerts**: Unusual access patterns and security violations
-- **Reporting**: Detailed access reports and analytics
-
-### 3. Validation Checker
-**Secret format validation and compliance**
-
-**Features:**
-- **Format Validation**: Validates secret formats against defined rules
-- **Compliance Checking**: Ensures secrets meet security standards
-- **Rule Engine**: Configurable validation rules and policies
-- **Error Reporting**: Detailed validation error messages and recommendations
-
-### 4. Versioning Dashboard
-**Secret versioning and history tracking**
-
-**Features:**
-- **Version History**: Track all secret versions and changes
-- **Change Detection**: Monitor secret modifications and updates
-- **Rollback Support**: Easy rollback to previous secret versions
-- **Timeline View**: Visual timeline of secret changes
-
-### 5. Expiration Monitor
-**Secret expiration monitoring and alerts**
-
-**Features:**
-- **Expiration Tracking**: Monitor secret expiration dates
-- **Alert System**: Proactive alerts for expiring secrets
-- **Renewal Reminders**: Automated renewal notifications
-- **Compliance**: Ensure secrets are rotated before expiration
-
-### 6. Certificate TLS Dashboard
-**Certificate-based TLS management**
-
-**Features:**
-- **Certificate Management**: Load and display SSL certificates
-- **TLS Configuration**: HTTPS/TLS termination configuration
-- **Certificate Validation**: Verify certificate validity and expiration
-- **Security**: Secure certificate handling and storage
-
-### 7. Hot Reload Dashboard
-**Real-time secret updates without pod restarts**
-
-**Features:**
-- **Live Updates**: Automatic secret reloading on changes
-- **File Watching**: Monitor secret file changes in real-time
-- **Zero Downtime**: Update secrets without application restart
-- **Change Detection**: Track and log secret modifications
-
-### 8. Rotation Handler
-**Secret rotation monitoring and management**
-
-**Features:**
-- **Rotation Detection**: Monitor secret rotation events
-- **Version Tracking**: Track secret version changes
-- **Automation**: Automated rotation handling and notifications
-- **Compliance**: Ensure proper secret rotation practices
-
-### 9. Multi-Vault Dashboard
-**Multi-vault secret access and management**
-
-**Features:**
-- **Multiple Vaults**: Access secrets from multiple Azure Key Vaults
-- **Unified View**: Single interface for all vault secrets
-- **Access Control**: Per-vault access permissions and authentication
-- **Management**: Centralized multi-vault secret management
-
-### 10. Selective Sync Dashboard
-**Selective secret synchronization**
-
-**Features:**
-- **Selective Sync**: Choose which secrets to synchronize
-- **Filtering**: Advanced filtering and selection criteria
-- **Efficiency**: Reduce resource usage with selective sync
-- **Control**: Fine-grained control over secret synchronization
-
-### 11. Cross-Namespace Dashboard
-**Cross-namespace secret access patterns**
-
-**Features:**
-- **Cross-Namespace Access**: Access secrets across namespaces
-- **RBAC Integration**: Role-based access control for cross-namespace access
-- **Security**: Secure cross-namespace secret sharing
-- **Compliance**: Audit cross-namespace secret access
-
-### 12. External Secrets Redhat Dashboard
-**Red Hat External Secrets Operator integration**
-
-**Features:**
-- **ESO Integration**: Full External Secrets Operator integration
-- **Enterprise Features**: Advanced secret management capabilities
-- **Compliance**: Enterprise-grade compliance and security
-- **Scalability**: Scalable secret management for large environments
+For detailed dashboard documentation, deployment instructions, and troubleshooting, see [hello-world-app/DASHBOARDS.md](hello-world-app/DASHBOARDS.md).
 
 ## Available Examples
 
@@ -402,76 +306,6 @@ Demonstrates namespace-specific secret access and RBAC patterns.
 ```
 
 Uses Red Hat External Secrets Operator with `operator.openshift.io/v1alpha1` API group.
-
-## Deploy Monitoring Dashboards
-
-### Deploy All Dashboards
-```bash
-cd hello-world-app
-./deploy.sh
-```
-
-### Deploy Specific Dashboards
-```bash
-# Security dashboard
-./deploy.sh deploy security-dashboard
-
-# Audit dashboard
-./deploy.sh deploy audit-dashboard
-
-# Validation checker
-./deploy.sh deploy validation-checker
-
-# Versioning dashboard
-./deploy.sh deploy versioning-dashboard
-
-# Expiration monitor
-./deploy.sh deploy expiration-monitor
-
-# Certificate TLS
-./deploy.sh deploy certificate-tls
-
-# Hot reload
-./deploy.sh deploy hot-reload
-
-# Rotation handler
-./deploy.sh deploy rotation-handler
-
-# Multi-vault
-./deploy.sh deploy multi-vault
-
-# Selective sync
-./deploy.sh deploy selective-sync
-
-# Cross-namespace
-./deploy.sh deploy cross-namespace
-
-# External Secrets Redhat
-./deploy.sh deploy external-secrets-redhat
-```
-
-### Dashboard Access
-
-All dashboards are accessible via OpenShift routes:
-- **Security Dashboard**: `https://security-dashboard.apps.<cluster-domain>`
-- **Audit Dashboard**: `https://audit-dashboard.apps.<cluster-domain>`
-- **Validation Checker**: `https://validation-checker.apps.<cluster-domain>`
-- **Versioning Dashboard**: `https://versioning-dashboard.apps.<cluster-domain>`
-- **Expiration Monitor**: `https://expiration-monitor.apps.<cluster-domain>`
-- **Certificate TLS**: `https://certificate-tls.apps.<cluster-domain>`
-- **Hot Reload**: `https://hot-reload.apps.<cluster-domain>`
-- **Rotation Handler**: `https://rotation-handler.apps.<cluster-domain>`
-- **Multi-Vault**: `https://multi-vault.apps.<cluster-domain>`
-- **Selective Sync**: `https://selective-sync.apps.<cluster-domain>`
-- **Cross-Namespace**: `https://cross-namespace.apps.<cluster-domain>`
-- **External Secrets Redhat**: `https://external-secrets-redhat.apps.<cluster-domain>`
-
-### Dashboard Filtering
-
-Use OpenShift web console labels to filter dashboards:
-- **All Dashboards**: `dashboard-type=monitoring`
-- **By Method**: `secret-method=azure-api`, `secret-method=csi`, `secret-method=environment`
-- **By Operator**: `operator=eso`, `operator=sscsi`
 
 ## Testing
 
@@ -567,13 +401,16 @@ curl -k https://security-dashboard.apps.<cluster-domain>/api/health
 ```bash
 # Check resources
 oc get all -n openshift-cluster-csi-drivers
-oc get secretproviderclass -n secrets-store-test
+oc get secretproviderclass --all-namespaces
 
 # Check logs
 oc logs -n openshift-cluster-csi-drivers -l app=csi-secrets-store-provider-azure
 
-# Test secret access
-oc exec -n secrets-store-test <test-pod> -- ls -la /mnt/secrets-store/
+# Test secret access (namespace created dynamically by examples)
+# First, find the namespace where examples were deployed:
+# oc get secretproviderclass --all-namespaces
+# Then use that namespace:
+# oc exec -n <example-namespace> <test-pod> -- ls -la /mnt/secrets-store/
 
 # Check Azure resources
 ./bin/install cleanup status
@@ -609,17 +446,19 @@ Examples for:
 - OpenShift monitoring integration
 - Real-time security and compliance monitoring
 
-## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+## About Me
+
+**John Johansson**  
+Specialist Adoption Architect at Red Hat
+
+I specialize in helping organizations successfully adopt and optimize OpenShift deployments. This project was created to demonstrate Azure Key Vault integration with OpenShift using the Secrets Store CSI Driver and External Secrets Operator.
+
+Connect with me for OpenShift architecture guidance, best practices, and advanced monitoring solutions.
 
 ## License
 
-This project is licensed under the MIT License.
+This project is provided as-is for OpenShift integration tests to Azure Key Vault.
 
 ## Support
 
