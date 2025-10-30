@@ -1,7 +1,7 @@
 const http = require('http');
 const { SecretClient } = require('@azure/keyvault-secrets');
 const { ClientSecretCredential } = require('@azure/identity');
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 class MultiVaultWebapp extends HelloWorldWebapp {
     constructor(config) {
