@@ -167,6 +167,117 @@ EOF
     print_success "SecretProviderClass $spc_name created in $namespace namespace"
 }
 
+# Ensure ESO resources (SecretStore, Secret, ExternalSecret) exist in namespace
+ensure_eso_resources() {
+    local namespace="$1"
+    local secret_name="azure-keyvault-sp"
+    local secretstore_name="azure-keyvault-secretstore"
+    local externalsecret_name="hello-world-external-secrets"
+    local target_secret_name="hello-world-redhat-external-secrets-synced"
+    
+    # Create Service Principal secret if it doesn't exist
+    if ! oc get secret "$secret_name" -n "$namespace" &>/dev/null; then
+        print_status "Creating Service Principal secret $secret_name in $namespace namespace..."
+        oc create secret generic "$secret_name" \
+            --from-literal=client-id="${SERVICE_PRINCIPAL_CLIENT_ID}" \
+            --from-literal=client-secret="${SERVICE_PRINCIPAL_CLIENT_SECRET}" \
+            -n "$namespace" \
+            --dry-run=client -o yaml | oc apply -f -
+        print_success "Service Principal secret $secret_name created in $namespace namespace"
+    else
+        print_status "Service Principal secret $secret_name already exists in $namespace namespace"
+    fi
+    
+    # Create SecretStore if it doesn't exist
+    if ! oc get secretstore "$secretstore_name" -n "$namespace" &>/dev/null; then
+        print_status "Creating SecretStore $secretstore_name in $namespace namespace..."
+        cat <<EOF | oc apply -f -
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: ${secretstore_name}
+  namespace: ${namespace}
+spec:
+  provider:
+    azurekv:
+      authSecretRef:
+        clientId:
+          name: ${secret_name}
+          key: client-id
+        clientSecret:
+          name: ${secret_name}
+          key: client-secret
+      tenantId: "${AZURE_TENANT_ID}"
+      vaultUrl: "https://${ACTUAL_KEYVAULT_NAME}.vault.azure.net"
+      type: AzureKV
+      environmentType: PublicCloud
+EOF
+        print_success "SecretStore $secretstore_name created in $namespace namespace"
+    else
+        print_status "SecretStore $secretstore_name already exists in $namespace namespace"
+    fi
+    
+    # Create ExternalSecret if it doesn't exist
+    if ! oc get externalsecret "$externalsecret_name" -n "$namespace" &>/dev/null; then
+        print_status "Creating ExternalSecret $externalsecret_name in $namespace namespace..."
+        cat <<EOF | oc apply -f -
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: ${externalsecret_name}
+  namespace: ${namespace}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ${secretstore_name}
+    kind: SecretStore
+  target:
+    name: ${target_secret_name}
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        database-password: "{{ index . \"database-password\" }}"
+        api-key: "{{ index . \"api-key\" }}"
+        hello-world-secret: "{{ index . \"hello-world-secret\" }}"
+  data:
+  - secretKey: database-password
+    remoteRef:
+      key: database-password
+  - secretKey: api-key
+    remoteRef:
+      key: api-key
+  - secretKey: hello-world-secret
+    remoteRef:
+      key: hello-world-secret
+EOF
+        print_success "ExternalSecret $externalsecret_name created in $namespace namespace"
+    else
+        print_status "ExternalSecret $externalsecret_name already exists in $namespace namespace"
+    fi
+    
+    # Wait for ExternalSecret to sync the secret
+    print_status "Waiting for ExternalSecret to sync secrets (this may take a few seconds)..."
+    local max_wait=30
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        if oc get secret "$target_secret_name" -n "$namespace" &>/dev/null 2>&1; then
+            # Check if secret has all 3 required keys
+            local secret_data=$(oc get secret "$target_secret_name" -n "$namespace" -o jsonpath='{.data}' 2>/dev/null)
+            if echo "$secret_data" | grep -q "database-password" && \
+               echo "$secret_data" | grep -q "api-key" && \
+               echo "$secret_data" | grep -q "hello-world-secret"; then
+                print_success "ExternalSecret synced successfully with all required keys"
+                return 0
+            fi
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    
+    print_warning "ExternalSecret may still be syncing. Secret $target_secret_name may not be fully ready yet."
+}
+
 # Calculate content hash for package.json/package-lock.json to detect changes
 calculate_dependency_hash() {
     local script_dir="$(dirname "${BASH_SOURCE[0]}")"
@@ -1038,6 +1149,12 @@ deploy_cross_namespace() {
 
     # Deploy Red Hat External Secrets Operator webapp
 deploy_external_secrets_redhat() {
+    # Ensure namespace exists
+    local namespace=$(ensure_namespace "external-secrets-redhat")
+    
+    # Ensure ESO resources (SecretStore, Secret, ExternalSecret) exist
+    ensure_eso_resources "$namespace"
+    
     deploy_custom_webapp_with_template \
         "external-secrets-redhat" \
         "Hello World - Red Hat External Secrets Operator" \
