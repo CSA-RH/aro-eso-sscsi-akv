@@ -171,21 +171,6 @@ print_status() {
     echo -e "${YELLOW}➤${NC} $1"
 }
 
-print_success() {
-    echo -e "${GREEN}✅${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}❌${NC} $1"
-}
-
-print_info() {
-    echo -e "${BLUE}ℹ️${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠️${NC} $1"
-}
 
 # Parse command line arguments
 parse_arguments() {
@@ -252,33 +237,6 @@ check_prerequisites() {
     fi
     
     print_success "All prerequisites met!"
-}
-
-# Retry Azure operation with exponential backoff
-retry_azure_operation() {
-    local operation="$1"
-    local max_attempts=3
-    local attempt=1
-    local delay=2
-    
-    while [ $attempt -le $max_attempts ]; do
-        print_status "Attempt $attempt/$max_attempts: $operation"
-        
-        if eval "$operation"; then
-            return 0
-        fi
-        
-        if [ $attempt -lt $max_attempts ]; then
-            print_warning "Operation failed. Retrying in ${delay} seconds..."
-            sleep $delay
-            delay=$((delay * 2))  # Exponential backoff
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    print_error "Operation failed after $max_attempts attempts"
-    return 1
 }
 
 # Refresh Azure authentication if needed
