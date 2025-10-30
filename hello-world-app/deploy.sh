@@ -1292,37 +1292,65 @@ cleanup_webapps() {
         print_header "Cleaning Up All Hello World Webapps"
         
         local apps=("csi-driver" "direct-api" "secret-sync" "external-secrets-redhat" "certificate-tls" "hot-reload" "rotation-handler" "versioning-dashboard" "multi-vault" "expiration-monitor" "audit-dashboard" "validation-checker" "security-dashboard" "selective-sync" "cross-namespace")
-    
+        
+        # Collect existing namespaces
+        local existing_namespaces=()
         for app in "${apps[@]}"; do
             local namespace="hello-world-${app}"
             if oc get namespace "${namespace}" &>/dev/null; then
-                print_status "Cleaning up ${app} (namespace: ${namespace})..."
-                
-                # Scale down deployments to 0 replicas first to prevent pod recreation
-                print_status "Scaling down deployments to 0 replicas..."
-                if oc get deployments -n "${namespace}" --no-headers 2>/dev/null | grep -q .; then
-                    oc scale deployment --all --replicas=0 -n "${namespace}" 2>/dev/null || true
-                else
-                    print_status "No deployments found to scale down"
-                fi
-                
-                # Wait a moment for pods to terminate
-                sleep 2
-                
-                # Now delete all resources
+                existing_namespaces+=("${namespace}")
+            fi
+        done
+        
+        if [ ${#existing_namespaces[@]} -eq 0 ]; then
+            print_status "No webapp namespaces found to clean up"
+            return 0
+        fi
+        
+        print_status "Found ${#existing_namespaces[@]} namespaces to clean up"
+        
+        # PHASE 1: Scale down ALL deployments in parallel
+        print_status "Phase 1: Scaling down all deployments to 0 replicas..."
+        local scale_jobs=()
+        for namespace in "${existing_namespaces[@]}"; do
+            if oc get deployments -n "${namespace}" --no-headers 2>/dev/null | grep -q .; then
+                print_status "Scaling down deployments in ${namespace}..."
+                oc scale deployment --all --replicas=0 -n "${namespace}" 2>/dev/null || true &
+                scale_jobs+=($!)
+            fi
+        done
+        
+        # Wait for all scale operations to complete
+        for job in "${scale_jobs[@]}"; do
+            wait $job 2>/dev/null || true
+        done
+        
+        # PHASE 2: Wait for pods to terminate
+        print_status "Phase 2: Waiting for pods to terminate..."
+        sleep 3
+        
+        # PHASE 3: Delete ALL resources in parallel
+        print_status "Phase 3: Deleting all resources in parallel..."
+        local delete_jobs=()
+        for namespace in "${existing_namespaces[@]}"; do
+            print_status "Deleting resources in ${namespace}..."
+            {
                 oc delete all --all -n "${namespace}" --ignore-not-found=true
                 oc delete serviceaccount --all -n "${namespace}" --ignore-not-found=true
                 oc delete configmap --all -n "${namespace}" --ignore-not-found=true
                 oc delete secret --all -n "${namespace}" --ignore-not-found=true
                 oc delete secretproviderclass --all -n "${namespace}" --ignore-not-found=true
-                print_status "Deleting namespace ${namespace}..."
                 oc delete namespace "${namespace}" --ignore-not-found=true --timeout=30s
-            else
-                print_status "Namespace ${namespace} does not exist, skipping..."
-            fi
+            } &
+            delete_jobs+=($!)
         done
-    
-        print_success "All webapps cleaned up!"
+        
+        # Wait for all delete operations to complete
+        for job in "${delete_jobs[@]}"; do
+            wait $job 2>/dev/null || true
+        done
+        
+        print_success "All webapps cleaned up in parallel!"
     else
         print_header "Cleaning Up Hello World Webapp: $app_name"
         
