@@ -1312,14 +1312,14 @@ install_external_secrets_operator() {
     print_status "Waiting for ExternalSecrets CRD to be available..."
     local crd_wait_count=0
     while [ $crd_wait_count -lt 30 ]; do
-        if oc api-resources | grep -q "externalsecrets.operator.openshift.io"; then
+        if oc api-resources | grep -q "externalsecrets.*operator.openshift.io"; then
             break
         fi
         sleep 2
         crd_wait_count=$((crd_wait_count + 1))
     done
     
-    if oc api-resources | grep -q "externalsecrets.operator.openshift.io"; then
+    if oc api-resources | grep -q "externalsecrets.*operator.openshift.io"; then
         print_status "Creating External Secrets configuration..."
         oc apply -f manifests/external-secrets-operator/externalsecrets.yaml
         
