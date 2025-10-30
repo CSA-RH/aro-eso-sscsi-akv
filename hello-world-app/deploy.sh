@@ -1300,7 +1300,7 @@ show_urls() {
             esac
             # Get the actual accessible URL from the route status
             local namespace="hello-world-${app}"
-            local route_name="${app}-route"
+            local route_name="$(get_short_route_name "$app")"
             local url=$(oc get route "${route_name}" -n "${namespace}" -o jsonpath='https://{.status.ingress[0].host}' 2>/dev/null || oc get route "${route_name}" -n "${namespace}" -o jsonpath='https://{.spec.host}' 2>/dev/null || echo "https://${app}.${ROUTE_DOMAIN}")
         echo -e "${GREEN}${desc}:${NC} ${url}"
     done
