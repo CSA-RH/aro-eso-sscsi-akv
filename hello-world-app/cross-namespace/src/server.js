@@ -72,82 +72,183 @@ class CrossNamespaceWebapp extends HelloWorldWebapp {
     getHTMLWithCrossNamespaceInfo(localSecrets) {
         return `
         <div class="container">
-            <h2>Cross-Namespace Secret Sharing</h2>
+            <h2>🔐 RBAC & Cross-Namespace Secret Access</h2>
             
-            <div class="namespace-info">
-                <div class="info-card">
-                    <h3>Current Namespace</h3>
-                    <div class="namespace-name">${this.currentNamespace}</div>
+            <div class="rbac-demo">
+                <div class="demo-scenario">
+                    <h3>🎭 RBAC Scenario Demonstration</h3>
+                    <p>This dashboard simulates different RBAC scenarios to show how Kubernetes Role-Based Access Control affects secret access across namespaces.</p>
                 </div>
-                <div class="info-card">
-                    <h3>Shared Namespaces</h3>
-                    <div class="namespace-list">
-                        ${this.sharedNamespaces.length > 0 
-                            ? this.sharedNamespaces.map(ns => `<span class="badge">${ns}</span>`).join('')
-                            : '<em>None configured</em>'}
+
+                <div class="namespace-info">
+                    <div class="info-card current-ns">
+                        <h3>📍 Current Namespace</h3>
+                        <div class="namespace-name">${this.currentNamespace}</div>
+                        <div class="service-account">Service Account: hello-world-cross-namespace-sa</div>
+                    </div>
+                    <div class="info-card permissions">
+                        <h3>🔑 Current Permissions</h3>
+                        <div class="permission-list">
+                            <div class="permission-item allowed">✅ Read secrets in ${this.currentNamespace}</div>
+                            <div class="permission-item denied">❌ Read secrets in shared-services</div>
+                            <div class="permission-item denied">❌ Read secrets in production</div>
+                            <div class="permission-item allowed">✅ Read secrets in development</div>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <div class="secrets-section">
-                <h3>Local Secrets (from ${this.currentNamespace})</h3>
-                <div class="secrets-grid">
-                    ${Object.entries(localSecrets).map(([name, value]) => `
-                    <div class="secret-card local">
-                        <div class="secret-header">
-                            <strong>${name}</strong>
-                            <span class="badge badge-primary">Local</span>
-                        </div>
-                        <div class="secret-content">
-                            <div class="secret-meta">
-                                <span>Namespace: ${this.currentNamespace}</span>
-                            </div>
-                            <div class="secret-value">
-                                Value: ${this.maskSecret(value)}
+                <div class="rbac-scenarios">
+                    <h3>🎯 RBAC Access Scenarios</h3>
+                    <div class="scenarios-grid">
+                        <div class="scenario-card success">
+                            <h4>✅ Local Access (Allowed)</h4>
+                            <p>Service account has <code>get, list</code> permissions on secrets in current namespace</p>
+                            <div class="secret-example">
+                                <strong>Secret:</strong> database-credentials<br>
+                                <strong>Namespace:</strong> ${this.currentNamespace}<br>
+                                <strong>Access:</strong> <span class="status-success">GRANTED</span>
                             </div>
                         </div>
-                    </div>
-                    `).join('')}
-                </div>
-            </div>
-
-            <div class="secrets-section">
-                <h3>Shared Secrets (from other namespaces)</h3>
-                <div class="secrets-grid">
-                    ${Object.entries(this.sharedSecrets).map(([key, secret]) => `
-                    <div class="secret-card ${secret.accessible ? 'shared' : 'unavailable'}">
-                        <div class="secret-header">
-                            <strong>${key}</strong>
-                            <span class="badge ${secret.accessible ? 'badge-success' : 'badge-warning'}">
-                                ${secret.accessible ? 'Shared' : 'Not Accessible'}
-                            </span>
-                        </div>
-                        <div class="secret-content">
-                            <div class="secret-meta">
-                                <span>Source Namespace: ${secret.namespace}</span><br>
-                                <span>Secret: ${secret.secretName} (${secret.key})</span>
+                        
+                        <div class="scenario-card denied">
+                            <h4>❌ Cross-Namespace (Denied)</h4>
+                            <p>Service account lacks permissions to access secrets in other namespaces</p>
+                            <div class="secret-example">
+                                <strong>Secret:</strong> shared-api-key<br>
+                                <strong>Namespace:</strong> shared-services<br>
+                                <strong>Access:</strong> <span class="status-denied">DENIED</span>
                             </div>
-                            <div class="secret-value">
-                                ${secret.accessible 
-                                    ? `Value: ${this.maskSecret(secret.value)}`
-                                    : '<em>Secret not accessible from this namespace (RBAC or secret not shared)</em>'}
+                        </div>
+                        
+                        <div class="scenario-card warning">
+                            <h4>⚠️ Insufficient Permissions</h4>
+                            <p>Service account has limited permissions (e.g., only <code>get</code> but not <code>list</code>)</p>
+                            <div class="secret-example">
+                                <strong>Secret:</strong> production-db-password<br>
+                                <strong>Namespace:</strong> production<br>
+                                <strong>Access:</strong> <span class="status-warning">PARTIAL</span>
                             </div>
                         </div>
                     </div>
-                    `).join('')}
                 </div>
-            </div>
 
-            <div class="info-box">
-                <h4>How Cross-Namespace Secret Sharing Works:</h4>
-                <ul>
-                    <li><strong>Local Secrets:</strong> Available only in the current namespace (${this.currentNamespace})</li>
-                    <li><strong>Shared Secrets:</strong> Created in one namespace and referenced in others via <code>secretKeyRef</code></li>
-                    <li><strong>RBAC:</strong> Service accounts need appropriate permissions to access secrets across namespaces</li>
-                    <li><strong>Best Practice:</strong> Create shared secrets in a dedicated namespace (e.g., 'shared-services')</li>
-                    <li><strong>Security:</strong> Only share secrets that need to be accessed by multiple namespaces</li>
-                </ul>
-            </div>
+                <div class="secrets-section">
+                    <h3>🔍 Secret Access Results</h3>
+                    <div class="secrets-grid">
+                        ${Object.entries(localSecrets).map(([name, value]) => `
+                        <div class="secret-card local">
+                            <div class="secret-header">
+                                <strong>${name}</strong>
+                                <span class="badge badge-success">✅ Accessible</span>
+                            </div>
+                            <div class="secret-content">
+                                <div class="secret-meta">
+                                    <span>Namespace: ${this.currentNamespace}</span><br>
+                                    <span>Permission: get, list</span>
+                                </div>
+                                <div class="secret-value">
+                                    Value: ${this.maskSecret(value)}
+                                </div>
+                            </div>
+                        </div>
+                        `).join('')}
+                        
+                        <div class="secret-card denied">
+                            <div class="secret-header">
+                                <strong>shared-api-key</strong>
+                                <span class="badge badge-danger">❌ Denied</span>
+                            </div>
+                            <div class="secret-content">
+                                <div class="secret-meta">
+                                    <span>Namespace: shared-services</span><br>
+                                    <span>Permission: none</span>
+                                </div>
+                                <div class="secret-value">
+                                    <em>Error: secrets "shared-api-key" is forbidden: User "system:serviceaccount:${this.currentNamespace}:hello-world-cross-namespace-sa" cannot get resource "secrets" in API group "" in the namespace "shared-services"</em>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="secret-card warning">
+                            <div class="secret-header">
+                                <strong>production-db-password</strong>
+                                <span class="badge badge-warning">⚠️ Limited</span>
+                            </div>
+                            <div class="secret-content">
+                                <div class="secret-meta">
+                                    <span>Namespace: production</span><br>
+                                    <span>Permission: get only</span>
+                                </div>
+                                <div class="secret-value">
+                                    <em>Access limited: Can read specific secret but cannot list secrets in namespace</em>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rbac-examples">
+                    <h3>📚 RBAC Configuration Examples</h3>
+                    <div class="example-tabs">
+                        <div class="tab-content">
+                            <h4>Role Definition (ClusterRole)</h4>
+                            <pre><code>apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: secret-reader
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]</code></pre>
+                        </div>
+                        
+                        <div class="tab-content">
+                            <h4>RoleBinding (Namespace-scoped)</h4>
+                            <pre><code>apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: secret-reader-binding
+  namespace: ${this.currentNamespace}
+subjects:
+- kind: ServiceAccount
+  name: hello-world-cross-namespace-sa
+  namespace: ${this.currentNamespace}
+roleRef:
+  kind: ClusterRole
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+                        </div>
+                        
+                        <div class="tab-content">
+                            <h4>Cross-Namespace Access</h4>
+                            <pre><code># To allow cross-namespace access, use ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cross-namespace-secret-reader
+subjects:
+- kind: ServiceAccount
+  name: hello-world-cross-namespace-sa
+  namespace: ${this.currentNamespace}
+roleRef:
+  kind: ClusterRole
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box">
+                    <h4>🔐 RBAC Best Practices:</h4>
+                    <ul>
+                        <li><strong>Principle of Least Privilege:</strong> Grant only the minimum permissions needed</li>
+                        <li><strong>Namespace Isolation:</strong> Use RoleBinding for namespace-scoped access</li>
+                        <li><strong>Cross-Namespace Access:</strong> Use ClusterRoleBinding only when necessary</li>
+                        <li><strong>Service Account Security:</strong> Use dedicated service accounts for different workloads</li>
+                        <li><strong>Regular Audits:</strong> Review and audit RBAC permissions regularly</li>
+                        <li><strong>Secret Sharing:</strong> Consider using external secret management for cross-namespace secrets</li>
+                    </ul>
+                </div>
             
             <style>
                 .namespace-info {
