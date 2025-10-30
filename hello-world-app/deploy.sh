@@ -540,6 +540,49 @@ get_csi_volumes() {
             name: secrets-store-csi-driver-sp"
 }
 
+# Helper: Get short route name for long app types
+get_short_route_name() {
+    local app_type="$1"
+    case "$app_type" in
+        "external-secrets-redhat")
+            echo "eso-redhat-route"
+            ;;
+        "certificate-tls")
+            echo "cert-tls-route"
+            ;;
+        "expiration-monitor")
+            echo "exp-monitor-route"
+            ;;
+        "audit-dashboard")
+            echo "audit-dash-route"
+            ;;
+        "validation-checker")
+            echo "valid-check-route"
+            ;;
+        "security-dashboard")
+            echo "sec-dash-route"
+            ;;
+        "selective-sync")
+            echo "sel-sync-route"
+            ;;
+        "cross-namespace")
+            echo "cross-ns-route"
+            ;;
+        "rotation-handler")
+            echo "rot-handler-route"
+            ;;
+        "versioning-dashboard")
+            echo "ver-dash-route"
+            ;;
+        "multi-vault")
+            echo "multi-vault-route"
+            ;;
+        *)
+            echo "${app_type}-route"
+            ;;
+    esac
+}
+
 
     # Deploy CSI Driver webapp
 deploy_csi_driver() {
@@ -858,9 +901,10 @@ deploy_custom_webapp_with_template() {
     export ENVIRONMENT_VARIABLES="$env_variables"
     export ENV_FROM_SECRETS="$env_from_secrets"
     export OPERATOR_LABEL="$operator_label"
+    export ROUTE_NAME="$(get_short_route_name "$app_type")"
     
     # Use template with envsubst
-    envsubst '${APP_TYPE} ${APP_NAME} ${NAMESPACE} ${IMAGE_NAME} ${SERVICE_ACCOUNT_NAME} ${VOLUME_MOUNTS} ${VOLUMES} ${ENVIRONMENT_VARIABLES} ${ENV_FROM_SECRETS} ${OPERATOR_LABEL}' < "${script_dir}/templates/custom-webapp-template.yaml" | oc apply -f -
+    envsubst '${APP_TYPE} ${APP_NAME} ${NAMESPACE} ${IMAGE_NAME} ${SERVICE_ACCOUNT_NAME} ${VOLUME_MOUNTS} ${VOLUMES} ${ENVIRONMENT_VARIABLES} ${ENV_FROM_SECRETS} ${OPERATOR_LABEL} ${ROUTE_NAME}' < "${script_dir}/templates/custom-webapp-template.yaml" | oc apply -f -
     
     wait_for_deployment "$app_type" "$app_name" "$namespace"
 }

@@ -1,4 +1,4 @@
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 const app = new HelloWorldWebapp({
     appName: 'Hello World - Red Hat External Secrets Operator',

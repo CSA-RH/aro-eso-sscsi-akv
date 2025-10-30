@@ -71,7 +71,7 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: ${APP_TYPE}-route
+  name: ${ROUTE_NAME}
   namespace: ${NAMESPACE}
   labels:
     app: hello-world-${APP_TYPE}
