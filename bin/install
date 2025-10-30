@@ -1274,7 +1274,7 @@ install_external_secrets_operator() {
     print_header "Installing External Secrets Operator"
     
     # Check if External Secrets Operator is already installed
-    if oc get csv -n external-secrets-operator | grep -q "openshift-external-secrets-operator\|external-secrets-operator" && oc get csv -n external-secrets-operator | grep -q "Succeeded"; then
+    if oc get csv -n external-secrets-operator | grep -q "external-secrets-operator" && oc get csv -n external-secrets-operator | grep -q "Succeeded"; then
         print_info "External Secrets Operator is already installed in external-secrets-operator namespace"
         return 0
     fi
@@ -1287,7 +1287,7 @@ install_external_secrets_operator() {
     local wait_count=0
     local eso_csv=""
     while [ $wait_count -lt 30 ]; do
-        eso_csv=$(oc get csv -n external-secrets-operator 2>/dev/null | grep "openshift-external-secrets-operator" | awk '{print $1}' | head -1)
+        eso_csv=$(oc get csv -n external-secrets-operator 2>/dev/null | grep "external-secrets-operator" | awk '{print $1}' | head -1)
         if [ -n "${eso_csv}" ]; then
             break
         fi
