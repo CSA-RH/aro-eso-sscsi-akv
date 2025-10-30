@@ -1381,7 +1381,24 @@ cleanup_webapps() {
             local namespace="hello-world-${app}"
             if oc get namespace "${namespace}" &>/dev/null; then
                 print_status "Cleaning up ${app} (namespace: ${namespace})..."
-                oc delete all,serviceaccount,configmap,secret,secretproviderclass -n "${namespace}" --ignore-not-found=true
+                
+                # Scale down deployments to 0 replicas first to prevent pod recreation
+                print_status "Scaling down deployments to 0 replicas..."
+                if oc get deployments -n "${namespace}" --no-headers 2>/dev/null | grep -q .; then
+                    oc scale deployment --all --replicas=0 -n "${namespace}" 2>/dev/null || true
+                else
+                    print_status "No deployments found to scale down"
+                fi
+                
+                # Wait a moment for pods to terminate
+                sleep 2
+                
+                # Now delete all resources
+                oc delete all --all -n "${namespace}" --ignore-not-found=true
+                oc delete serviceaccount --all -n "${namespace}" --ignore-not-found=true
+                oc delete configmap --all -n "${namespace}" --ignore-not-found=true
+                oc delete secret --all -n "${namespace}" --ignore-not-found=true
+                oc delete secretproviderclass --all -n "${namespace}" --ignore-not-found=true
                 print_status "Deleting namespace ${namespace}..."
                 oc delete namespace "${namespace}" --ignore-not-found=true --timeout=30s
             else
@@ -1395,11 +1412,28 @@ cleanup_webapps() {
         
         # Validate app name
         case "$app_name" in
-            "csi-driver"|"direct-api"|"secret-sync"|"external-secrets-redhat"|"certificate-tls"|"hot-reload"|"rotation-handler"|"versioning-dashboard"|"multi-vault")
+            "csi-driver"|"direct-api"|"secret-sync"|"external-secrets-redhat"|"certificate-tls"|"hot-reload"|"rotation-handler"|"versioning-dashboard"|"multi-vault"|"expiration-monitor"|"audit-dashboard"|"validation-checker"|"security-dashboard"|"selective-sync"|"cross-namespace")
                 local namespace="hello-world-${app_name}"
                 if oc get namespace "${namespace}" &>/dev/null; then
                     print_status "Cleaning up ${app_name} (namespace: ${namespace})..."
-                    oc delete all,serviceaccount,configmap,secret,secretproviderclass -n "${namespace}" --ignore-not-found=true
+                    
+                    # Scale down deployments to 0 replicas first to prevent pod recreation
+                    print_status "Scaling down deployments to 0 replicas..."
+                    if oc get deployments -n "${namespace}" --no-headers 2>/dev/null | grep -q .; then
+                        oc scale deployment --all --replicas=0 -n "${namespace}" 2>/dev/null || true
+                    else
+                        print_status "No deployments found to scale down"
+                    fi
+                    
+                    # Wait a moment for pods to terminate
+                    sleep 2
+                    
+                    # Now delete all resources
+                    oc delete all --all -n "${namespace}" --ignore-not-found=true
+                    oc delete serviceaccount --all -n "${namespace}" --ignore-not-found=true
+                    oc delete configmap --all -n "${namespace}" --ignore-not-found=true
+                    oc delete secret --all -n "${namespace}" --ignore-not-found=true
+                    oc delete secretproviderclass --all -n "${namespace}" --ignore-not-found=true
                     print_status "Deleting namespace ${namespace}..."
                     oc delete namespace "${namespace}" --ignore-not-found=true --timeout=30s
                     print_success "Webapp ${app_name} cleaned up!"
@@ -1420,6 +1454,12 @@ cleanup_webapps() {
                 echo "  rotation-handler             - Secret Rotation Handler"
                 echo "  versioning-dashboard         - Secret Versioning Dashboard"
                 echo "  multi-vault                 - Multi-Vault Access"
+                echo "  expiration-monitor          - Secret Expiration Monitor"
+                echo "  audit-dashboard             - Secret Audit Dashboard"
+                echo "  validation-checker          - Secret Validation Checker"
+                echo "  security-dashboard          - Security & Compliance Dashboard"
+                echo "  selective-sync              - Selective Secret Sync"
+                echo "  cross-namespace             - Cross-Namespace Secret Access"
                 exit 1
                 ;;
         esac
