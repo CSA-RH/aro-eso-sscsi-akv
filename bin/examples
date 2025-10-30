@@ -783,37 +783,65 @@ cleanup_examples() {
     
     # Clean up test pods in any namespace (in case they weren't in example namespaces)
     # Exclude operator namespaces
+    local test_pods_found=false
     for ns in $(oc get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n'); do
         if [[ ! " ${operator_namespaces[@]} " =~ " ${ns} " ]]; then
-            oc delete pod -l app=secrets-store-test -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+            if oc get pod -l app=secrets-store-test -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+                test_pods_found=true
+                oc delete pod -l app=secrets-store-test -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+            fi
         fi
     done
+    if [ "$test_pods_found" = true ]; then
+        print_status "Cleaned up orphaned test pods"
+    fi
     
     # Clean up SecretProviderClasses with example labels (excluding operator namespaces)
     if oc api-resources | grep -q secretproviderclass; then
+        local spc_found=false
         for ns in $(oc get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n'); do
             if [[ ! " ${operator_namespaces[@]} " =~ " ${ns} " ]]; then
-                oc delete secretproviderclass -l app=secrets-store-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                if oc get secretproviderclass -l app=secrets-store-examples -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+                    spc_found=true
+                    oc delete secretproviderclass -l app=secrets-store-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                fi
             fi
         done
+        if [ "$spc_found" = true ]; then
+            print_status "Cleaned up orphaned SecretProviderClasses"
+        fi
     fi
     
     # Clean up ExternalSecrets with example labels (excluding operator namespaces)
     if oc api-resources | grep -q externalsecret; then
+        local eso_found=false
         for ns in $(oc get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n'); do
             if [[ ! " ${operator_namespaces[@]} " =~ " ${ns} " ]]; then
-                oc delete externalsecret -l app=external-secrets-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                if oc get externalsecret -l app=external-secrets-examples -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+                    eso_found=true
+                    oc delete externalsecret -l app=external-secrets-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                fi
             fi
         done
+        if [ "$eso_found" = true ]; then
+            print_status "Cleaned up orphaned ExternalSecrets"
+        fi
     fi
     
     # Clean up SecretStores with example labels (excluding operator namespaces)
     if oc api-resources | grep -q secretstore; then
+        local ss_found=false
         for ns in $(oc get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n'); do
             if [[ ! " ${operator_namespaces[@]} " =~ " ${ns} " ]]; then
-                oc delete secretstore -l app=external-secrets-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                if oc get secretstore -l app=external-secrets-examples -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+                    ss_found=true
+                    oc delete secretstore -l app=external-secrets-examples -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                fi
             fi
         done
+        if [ "$ss_found" = true ]; then
+            print_status "Cleaned up orphaned SecretStores"
+        fi
     fi
     
     print_success "Examples and test resources cleaned up successfully!"
