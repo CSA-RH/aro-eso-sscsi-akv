@@ -215,7 +215,7 @@ parse_arguments() {
                 ;;
             *)
                 print_error "Unknown option: $1"
-                print_error "Valid options for 'install' command are: --sscsi, --eso, --all, --help"
+                print_error "Valid options for 'operator' command are: --sscsi, --eso, --all, --help"
                 show_help
                 exit 1
                 ;;
@@ -2560,7 +2560,7 @@ show_help() {
     echo "Commands:"
             echo "  show        - Show current configuration"
             echo "  azure       - Setup and validate Azure resources"
-            echo "  install     - Install operators and providers (default)"
+            echo "  operator    - Install operators and providers (default)"
             echo "  cleanup     - Clean up resources"
     echo "  validate    - Validate the installation"
     echo "  help        - Show this help message"
@@ -2590,10 +2590,10 @@ show_help() {
             echo "  $0 azure                            # Setup and validate Azure resources"
             echo "  $0 validate azure                   # Validate Azure resources only (no setup)"
             echo "  $0 validate operators            # Validate operators installation only"
-            echo "  $0 install                          # Install SSCSI + Azure Provider (default)"
-            echo "  $0 install --sscsi                  # Install SSCSI + Azure Provider (explicit)"
-            echo "  $0 install --eso                    # Install External Secrets Operator only"
-            echo "  $0 install --all                    # Install all components (SSCSI + ESO + Azure Provider)"
+            echo "  $0 operator                         # Install SSCSI + Azure Provider (default)"
+            echo "  $0 operator --sscsi                 # Install SSCSI + Azure Provider (explicit)"
+            echo "  $0 operator --eso                   # Install External Secrets Operator only"
+            echo "  $0 operator --all                   # Install all components (SSCSI + ESO + Azure Provider)"
             echo "  $0 cleanup all                       # Clean up everything"
             echo "  $0 cleanup operators             # Clean up operators (Kubernetes resources)"
             echo "  $0 cleanup operators --force     # Force cleanup with aggressive finalizer removal"
@@ -2604,14 +2604,14 @@ show_help() {
 }
 
 # Main script logic
-COMMAND="${1:-install}"
+COMMAND="${1:-operator}"
 shift  # Remove the command from arguments
 
 # Initialize Azure values from CLI at script start
 initialize_azure_values
 
-# Parse arguments for install command
-if [[ "$COMMAND" == "install" ]]; then
+# Parse arguments for operator command
+if [[ "$COMMAND" == "operator" ]]; then
     parse_arguments "$@"
 fi
 
@@ -2625,14 +2625,14 @@ fi
             setup_azure_resources
             validate_azure_resources
             ;;
-        "cleanup"|"validate"|"install")
+        "cleanup"|"validate"|"operator")
             # Commands that need cluster access - check authentication
             if ! check_cluster_auth; then
                 exit 1
             fi
             
             case "$COMMAND" in
-    "install")
+    "operator")
         check_prerequisites
         
         # Show installation plan
