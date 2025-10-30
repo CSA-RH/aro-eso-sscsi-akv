@@ -824,11 +824,11 @@ setup_azure_resources() {
     }
     
     # Track which secrets were created successfully
-    # Total breakdown: 1 (hello-world) + 2 (basic secrets) + 3 (ssl-cert cert+key + ssl-private-key) + 3 (namespace/rbac) + 3 (rotating) = 12
+    # Total breakdown: 1 (hello-world) + 2 (basic secrets) + 3 (ssl-cert cert+key + ssl-private-key) + 1 (shared) + 3 (rotating) = 10
     # Note: ssl-certificate creation counts as 2 because it creates both a certificate and an associated key named "ssl-certificate"
     #       ssl-private-key is a separate standalone key object
     local secrets_created=0
-    local secrets_total=12
+    local secrets_total=10
     
     # Secrets for web applications (hello-world-app)
     print_status "Creating secrets for hello-world web applications..."
@@ -906,22 +906,6 @@ setup_azure_resources() {
         fi
     fi
     
-    # Secrets for namespace-based-rbac example
-    print_status "Creating secrets for namespace-based-rbac example..."
-    
-    if create_keyvault_secret "namespace-external-secrets-test-db-password" "NamespaceSpecificPassword456!"; then
-        print_success "namespace-external-secrets-test-db-password created"
-        secrets_created=$((secrets_created + 1))
-    else
-        print_warning "Failed to create namespace-external-secrets-test-db-password"
-    fi
-    
-    if create_keyvault_secret "namespace-external-secrets-test-api-key" "namespace-api-key-xyz789"; then
-        print_success "namespace-external-secrets-test-api-key created"
-        secrets_created=$((secrets_created + 1))
-    else
-        print_warning "Failed to create namespace-external-secrets-test-api-key"
-    fi
     
     if create_keyvault_secret "shared-readonly-config" "SharedConfigValue=readonly"; then
         print_success "shared-readonly-config created"
@@ -959,7 +943,6 @@ setup_azure_resources() {
         print_success "All secrets created successfully (${secrets_created}/${secrets_total})"
         print_info "Created web app secrets: hello-world-secret"
         print_info "Created example secrets: database-password, api-key, ssl-certificate, ssl-private-key"
-        print_info "Created namespace secrets: namespace-external-secrets-test-db-password, namespace-external-secrets-test-api-key"
         print_info "Created shared secret: shared-readonly-config"
         print_info "Created rotating secrets: rotating-database-password, rotating-api-key, rotating-jwt-secret"
     elif [ "$secrets_created" -gt 0 ]; then
@@ -974,8 +957,6 @@ setup_azure_resources() {
         print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'rotating-database-password' --value 'RotatingPassword123!v1'"
         print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'rotating-api-key' --value 'rotating-api-key-v1'"
         print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'rotating-jwt-secret' --value 'rotating-jwt-secret-value-v1'"
-        print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'namespace-external-secrets-test-db-password' --value 'NamespaceSpecificPassword456!'"
-        print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'namespace-external-secrets-test-api-key' --value 'namespace-api-key-xyz789'"
         print_info "az keyvault secret set --vault-name '${ACTUAL_KEYVAULT_NAME}' --name 'shared-readonly-config' --value 'SharedConfigValue=readonly'"
     fi
     
@@ -1408,52 +1389,6 @@ install_azure_provider() {
     print_success "Azure Key Vault Provider installation completed"
 }
 
-# Create SecretProviderClasses
-create_secretproviderclasses() {
-    print_header "Creating SecretProviderClasses"
-    
-    print_status "Creating basic SecretProviderClass using template..."
-    export SPC_NAME="azure-keyvault-basic-secrets"
-    export EXAMPLE_TYPE="basic"
-    export SECRET_OBJECTS="        - |
-            objectName: hello-world-secret
-            objectType: secret
-            objectVersion: \"\"
-        - |
-            objectName: database-password
-            objectType: secret
-            objectVersion: \"\"
-        - |
-            objectName: api-key
-            objectType: secret
-            objectVersion: \"\""
-    export NODE_PUBLISH_SECRET_REF="  nodePublishSecretRef:
-    name: secrets-store-csi-driver-sp"
-    export SECRET_OBJECTS_SYNC=""
-    # Set namespace to external-secrets-test for SecretProviderClass
-    local saved_namespace="${NAMESPACE}"
-    export NAMESPACE="external-secrets-test"
-    # Use actual Key Vault name (with prefix) in the SecretProviderClass
-    local saved_keyvault_name="${KEYVAULT_NAME}"
-    export KEYVAULT_NAME="${ACTUAL_KEYVAULT_NAME}"
-    
-    envsubst < manifests/templates/secretproviderclass-template.yaml | oc apply -f -
-    
-    # Also create the SecretProviderClass in hello-world-apps namespace for webapps
-    print_status "Creating SecretProviderClass in hello-world-apps namespace for webapps..."
-    export NAMESPACE="hello-world-apps"
-    
-    # Ensure namespace exists
-    oc create namespace hello-world-apps --dry-run=client -o yaml | oc apply -f - 2>/dev/null || true
-    
-    envsubst < manifests/templates/secretproviderclass-template.yaml | oc apply -f -
-    
-    # Restore original namespace and Key Vault name
-    export NAMESPACE="${saved_namespace}"
-    export KEYVAULT_NAME="${saved_keyvault_name}"
-    
-    print_success "SecretProviderClasses created successfully!"
-}
 
 # Validate installation
 validate_installation() {
@@ -1526,17 +1461,6 @@ validate_installation() {
         fi
     fi
     
-    # Check SecretProviderClasses (only if SSCSI was installed)
-    if [[ "$INSTALL_SSCSI" == "true" ]]; then
-        print_status "Checking SecretProviderClasses..."
-        local spc_count=$(oc get secretproviderclass -n external-secrets-test --no-headers 2>/dev/null | wc -l | tr -d ' ')
-        if [ "${spc_count}" -gt 0 ]; then
-        oc get secretproviderclass -n external-secrets-test
-            print_success "Found ${spc_count} SecretProviderClass(es) in external-secrets-test"
-        else
-            print_info "No SecretProviderClasses found in external-secrets-test (optional - can be created later)"
-        fi
-    fi
     
     # Check ESO if installed
     if [[ "$INSTALL_ESO" == "true" ]]; then
@@ -1667,7 +1591,7 @@ delete_crd_resources() {
     fi
     
     # Try to delete from known namespaces only (much faster than all namespaces)
-    local known_ns=("external-secrets-test" "external-secrets-operator" "hello-world-apps")
+    local known_ns=("external-secrets-operator" "hello-world-apps")
     for ns in "${known_ns[@]}"; do
         # Check if namespace exists
         if ! oc get namespace "$ns" &>/dev/null; then
@@ -1831,34 +1755,6 @@ cleanup_kubernetes() {
         printf "] %d%% (%d/%d) %s" $percentage $current $total "$csv_name"
     }
     
-    # Clean up examples and test resources (only for SSCSI or if no filter)
-    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_progress "Cleaning up examples and test resources..."
-        
-        # Run parallel cleanup for test resources
-        {
-            oc delete pod -l app=secrets-store-test -n external-secrets-test --ignore-not-found=true
-        } &
-        
-        {
-            if oc api-resources | grep -q secretproviderclass; then
-                oc delete secretproviderclass -l app=secrets-store-examples -n external-secrets-test --ignore-not-found=true
-            fi
-        } &
-        
-        {
-            oc delete secret -l secrets-store.csi.k8s.io/managed=true -n external-secrets-test --ignore-not-found=true
-            oc delete secret database-credentials api-credentials -n external-secrets-test --ignore-not-found=true
-        } &
-        
-        # Wait for parallel operations to complete
-        wait
-        
-        # Clean up test namespace
-        print_progress "Cleaning up test namespace..."
-        oc delete namespace external-secrets-test --ignore-not-found=true
-        force_delete_namespace "external-secrets-test"
-    fi
     
     # Clean up Azure provider (only for SSCSI or if no filter)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
