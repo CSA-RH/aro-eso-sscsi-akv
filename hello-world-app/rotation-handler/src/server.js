@@ -2,7 +2,7 @@ const http = require('http');
 const url = require('url');
 const { SecretClient } = require('@azure/keyvault-secrets');
 const { ClientSecretCredential } = require('@azure/identity');
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 class RotationHandlerWebapp extends HelloWorldWebapp {
     constructor(config) {
