@@ -1478,75 +1478,85 @@ validate_installation() {
     
     local validation_passed=true
     
-    # Check SSCSI operator CSV status
-    print_status "Checking Secrets Store CSI Driver operator..."
-    CSV_NAME=$(timeout 10 oc get csv -n ${OPERATOR_NAMESPACE} 2>/dev/null | grep "secrets-store-csi-driver-operator" | awk '{print $1}' | head -1 || echo "")
-    if [ -n "${CSV_NAME}" ]; then
-        CSV_PHASE=$(oc get csv ${CSV_NAME} -n ${OPERATOR_NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-        if [ "${CSV_PHASE}" = "Succeeded" ]; then
-            print_success "Secrets Store CSI Driver operator is ready (${CSV_NAME})"
+    # Check SSCSI operator CSV status (only if SSCSI was installed)
+    if [[ "$INSTALL_SSCSI" == "true" ]]; then
+        print_status "Checking Secrets Store CSI Driver operator..."
+        CSV_NAME=$(timeout 10 oc get csv -n ${OPERATOR_NAMESPACE} 2>/dev/null | grep "secrets-store-csi-driver-operator" | awk '{print $1}' | head -1 || echo "")
+        if [ -n "${CSV_NAME}" ]; then
+            CSV_PHASE=$(oc get csv ${CSV_NAME} -n ${OPERATOR_NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+            if [ "${CSV_PHASE}" = "Succeeded" ]; then
+                print_success "Secrets Store CSI Driver operator is ready (${CSV_NAME})"
+            else
+                print_warning "Secrets Store CSI Driver operator is in phase: ${CSV_PHASE}"
+                validation_passed=false
+            fi
         else
-            print_warning "Secrets Store CSI Driver operator is in phase: ${CSV_PHASE}"
+            print_error "Secrets Store CSI Driver operator not found"
             validation_passed=false
         fi
-    else
-        print_error "Secrets Store CSI Driver operator not found"
-        validation_passed=false
     fi
     
-    # Check ClusterCSIDriver
-    print_status "Checking ClusterCSIDriver..."
-    if oc get clustercsidriver secrets-store.csi.k8s.io &>/dev/null; then
-        DRIVER_STATE=$(oc get clustercsidriver secrets-store.csi.k8s.io -o jsonpath='{.spec.managementState}' 2>/dev/null || echo "Unknown")
-        print_success "ClusterCSIDriver found (managementState: ${DRIVER_STATE})"
-    else
-        print_error "ClusterCSIDriver not found"
-        validation_passed=false
-    fi
-    
-    # Check CSIDriver (created automatically by operator when ClusterCSIDriver is Managed)
-    print_status "Checking CSIDriver..."
-    if oc get csidriver secrets-store.csi.k8s.io &>/dev/null; then
-        print_success "CSIDriver found"
-    else
-        # CSIDriver is created automatically by the operator, so this is a warning, not an error
-        # It may take some time for the operator to create it after ClusterCSIDriver is set to Managed
-        print_warning "CSIDriver not found (may be created automatically by operator)"
-        if oc get clustercsidriver secrets-store.csi.k8s.io -o jsonpath='{.spec.managementState}' 2>/dev/null | grep -q "Managed"; then
-            print_info "ClusterCSIDriver is in Managed state - CSIDriver should be created automatically"
-            # Don't fail validation for this - it's informational
-        fi
-    fi
-    
-    # Check Azure provider pods
-    print_status "Checking Azure provider pods..."
-    local provider_pods=$(oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    local provider_ready=$(oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --no-headers 2>/dev/null | grep Running | wc -l | tr -d ' ')
-    if [ "${provider_pods}" -gt 0 ]; then
-    oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure
-        if [ "${provider_ready}" -eq "${provider_pods}" ]; then
-            print_success "Azure provider pods running (${provider_ready}/${provider_pods})"
+    # Check ClusterCSIDriver (only if SSCSI was installed)
+    if [[ "$INSTALL_SSCSI" == "true" ]]; then
+        print_status "Checking ClusterCSIDriver..."
+        if oc get clustercsidriver secrets-store.csi.k8s.io &>/dev/null; then
+            DRIVER_STATE=$(oc get clustercsidriver secrets-store.csi.k8s.io -o jsonpath='{.spec.managementState}' 2>/dev/null || echo "Unknown")
+            print_success "ClusterCSIDriver found (managementState: ${DRIVER_STATE})"
         else
-            print_warning "Azure provider pods: ${provider_ready}/${provider_pods} ready"
+            print_error "ClusterCSIDriver not found"
             validation_passed=false
         fi
-    else
-        print_error "Azure provider pods not found"
-        validation_passed=false
     fi
     
-    # Check SecretProviderClasses (optional - might not exist yet)
-    print_status "Checking SecretProviderClasses..."
-    local spc_count=$(oc get secretproviderclass -n ${TEST_NAMESPACE} --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    if [ "${spc_count}" -gt 0 ]; then
-    oc get secretproviderclass -n ${TEST_NAMESPACE}
-        print_success "Found ${spc_count} SecretProviderClass(es) in ${TEST_NAMESPACE}"
-    else
-        print_info "No SecretProviderClasses found in ${TEST_NAMESPACE} (optional - can be created later)"
+    # Check CSIDriver (only if SSCSI was installed)
+    if [[ "$INSTALL_SSCSI" == "true" ]]; then
+        print_status "Checking CSIDriver..."
+        if oc get csidriver secrets-store.csi.k8s.io &>/dev/null; then
+            print_success "CSIDriver found"
+        else
+            # CSIDriver is created automatically by the operator, so this is a warning, not an error
+            # It may take some time for the operator to create it after ClusterCSIDriver is set to Managed
+            print_warning "CSIDriver not found (may be created automatically by operator)"
+            if oc get clustercsidriver secrets-store.csi.k8s.io -o jsonpath='{.spec.managementState}' 2>/dev/null | grep -q "Managed"; then
+                print_info "ClusterCSIDriver is in Managed state - CSIDriver should be created automatically"
+                # Don't fail validation for this - it's informational
+            fi
+        fi
+    fi
+    
+    # Check Azure provider pods (only if SSCSI was installed)
+    if [[ "$INSTALL_SSCSI" == "true" ]]; then
+        print_status "Checking Azure provider pods..."
+        local provider_pods=$(oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        local provider_ready=$(oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --no-headers 2>/dev/null | grep Running | wc -l | tr -d ' ')
+        if [ "${provider_pods}" -gt 0 ]; then
+        oc get pods -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure
+            if [ "${provider_ready}" -eq "${provider_pods}" ]; then
+                print_success "Azure provider pods running (${provider_ready}/${provider_pods})"
+            else
+                print_warning "Azure provider pods: ${provider_ready}/${provider_pods} ready"
+                validation_passed=false
+            fi
+        else
+            print_error "Azure provider pods not found"
+            validation_passed=false
+        fi
+    fi
+    
+    # Check SecretProviderClasses (only if SSCSI was installed)
+    if [[ "$INSTALL_SSCSI" == "true" ]]; then
+        print_status "Checking SecretProviderClasses..."
+        local spc_count=$(oc get secretproviderclass -n ${TEST_NAMESPACE} --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${spc_count}" -gt 0 ]; then
+        oc get secretproviderclass -n ${TEST_NAMESPACE}
+            print_success "Found ${spc_count} SecretProviderClass(es) in ${TEST_NAMESPACE}"
+        else
+            print_info "No SecretProviderClasses found in ${TEST_NAMESPACE} (optional - can be created later)"
+        fi
     fi
     
     # Check ESO if installed
-    if oc get csv -n external-secrets-operator 2>/dev/null | grep -q "openshift-external-secrets-operator\|external-secrets-operator"; then
+    if [[ "$INSTALL_ESO" == "true" ]]; then
         print_status "Checking External Secrets Operator..."
         ESO_CSV=$(oc get csv -n external-secrets-operator 2>/dev/null | grep -E "openshift-external-secrets-operator|external-secrets-operator" | awk '{print $1}' | head -1)
         if [ -n "${ESO_CSV}" ]; then
@@ -1556,6 +1566,9 @@ validate_installation() {
             else
                 print_warning "External Secrets Operator is in phase: ${ESO_PHASE}"
             fi
+        else
+            print_error "External Secrets Operator CSV not found"
+            validation_passed=false
         fi
     fi
     
