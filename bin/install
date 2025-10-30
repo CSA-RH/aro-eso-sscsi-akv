@@ -1656,7 +1656,7 @@ delete_crd_resources() {
     print_status "Deleting all $crd_kind resources..."
     
     # Try to delete cluster-scoped resources first (faster, no namespace needed)
-    local cluster_resources=$(timeout 10 oc get "$crd_kind" --no-headers --request-timeout=10s 2>/dev/null | awk '{print $1}' || true)
+    local cluster_resources=$(timeout 15 oc get "$crd_kind" --no-headers --request-timeout=15s 2>/dev/null | awk '{print $1}' || true)
     if [ -n "$cluster_resources" ]; then
         echo "$cluster_resources" | while read -r resource; do
             if [ -n "$resource" ]; then
@@ -1675,7 +1675,7 @@ delete_crd_resources() {
         fi
         
         # Get resources with timeout
-        local resources=$(timeout 10 oc get "$crd_kind" -n "$ns" --no-headers --request-timeout=10s 2>/dev/null | awk '{print $1}' || true)
+        local resources=$(timeout 15 oc get "$crd_kind" -n "$ns" --no-headers --request-timeout=15s 2>/dev/null | awk '{print $1}' || true)
         if [ -n "$resources" ]; then
             echo "$resources" | while read -r resource; do
                 if [ -n "$resource" ]; then
@@ -1806,40 +1806,90 @@ cleanup_kubernetes() {
     
     # Note: Hello World webapps cleanup is skipped - use 'cleanup all' if you want to remove those
     
+    # Progress tracking
+    local total_steps=12
+    local current_step=0
+    
+    print_progress() {
+        current_step=$((current_step + 1))
+        print_status "Step $current_step/$total_steps: $1"
+    }
+    
+    # Progress bar for CSV deletion
+    show_csv_progress() {
+        local current="$1"
+        local total="$2"
+        local csv_name="$3"
+        local width=50
+        local percentage=$((current * 100 / total))
+        local filled=$((current * width / total))
+        local empty=$((width - filled))
+        
+        printf "\r\033[K["
+        printf "%*s" $filled | tr ' ' '='
+        printf "%*s" $empty | tr ' ' ' '
+        printf "] %d%% (%d/%d) %s" $percentage $current $total "$csv_name"
+    }
+    
     # Clean up examples and test resources (only for SSCSI or if no filter)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_status "Cleaning up examples and test resources..."
-        oc delete pod -l app=secrets-store-test -n ${TEST_NAMESPACE} --ignore-not-found=true
+        print_progress "Cleaning up examples and test resources..."
         
-        # Only try to delete SecretProviderClass if the CRD exists
-        if oc api-resources | grep -q secretproviderclass; then
-            oc delete secretproviderclass -l app=secrets-store-examples -n ${TEST_NAMESPACE} --ignore-not-found=true
-        fi
+        # Run parallel cleanup for test resources
+        {
+            oc delete pod -l app=secrets-store-test -n ${TEST_NAMESPACE} --ignore-not-found=true
+        } &
         
-        oc delete secret -l secrets-store.csi.k8s.io/managed=true -n ${TEST_NAMESPACE} --ignore-not-found=true
-        oc delete secret database-credentials api-credentials -n ${TEST_NAMESPACE} --ignore-not-found=true
+        {
+            if oc api-resources | grep -q secretproviderclass; then
+                oc delete secretproviderclass -l app=secrets-store-examples -n ${TEST_NAMESPACE} --ignore-not-found=true
+            fi
+        } &
+        
+        {
+            oc delete secret -l secrets-store.csi.k8s.io/managed=true -n ${TEST_NAMESPACE} --ignore-not-found=true
+            oc delete secret database-credentials api-credentials -n ${TEST_NAMESPACE} --ignore-not-found=true
+        } &
+        
+        # Wait for parallel operations to complete
+        wait
         
         # Clean up test namespace
-        print_status "Cleaning up test namespace..."
-    oc delete namespace ${TEST_NAMESPACE} --ignore-not-found=true
+        print_progress "Cleaning up test namespace..."
+        oc delete namespace ${TEST_NAMESPACE} --ignore-not-found=true
         force_delete_namespace "${TEST_NAMESPACE}"
     fi
     
     # Clean up Azure provider (only for SSCSI or if no filter)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_status "Cleaning up Azure provider..."
+        print_progress "Cleaning up Azure provider..."
+        
         # Delete DaemonSet first so pods don't get recreated
         oc delete daemonset csi-secrets-store-provider-azure -n ${NAMESPACE} --ignore-not-found=true
-        oc delete pod -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --ignore-not-found=true
-        oc delete serviceaccount csi-secrets-store-provider-azure -n ${NAMESPACE} --ignore-not-found=true
-        oc delete clusterrole csi-secrets-store-provider-azure-cluster-role --ignore-not-found=true
-        oc delete clusterrolebinding csi-secrets-store-provider-azure-cluster-rolebinding --ignore-not-found=true
+        
+        # Run parallel cleanup for Azure provider resources
+        {
+            oc delete pod -n ${NAMESPACE} -l app=csi-secrets-store-provider-azure --ignore-not-found=true
+        } &
+        
+        {
+            oc delete serviceaccount csi-secrets-store-provider-azure -n ${NAMESPACE} --ignore-not-found=true
+        } &
+        
+        {
+            oc delete clusterrole csi-secrets-store-provider-azure-cluster-role --ignore-not-found=true
+            oc delete clusterrolebinding csi-secrets-store-provider-azure-cluster-rolebinding --ignore-not-found=true
+        } &
+        
+        # Wait for parallel operations to complete
+        wait
+        
         # Remove privileged SCC (optional - may fail if used by other resources)
         oc adm policy remove-scc-from-user privileged -z csi-secrets-store-provider-azure -n ${NAMESPACE} 2>/dev/null || true
     fi
     
     # Clean up running pods created by operators
-    print_status "Cleaning up operator-managed pods..."
+    print_progress "Cleaning up operator-managed pods..."
     
     # Clean up SSCSI driver pods (only if no filter or filter is sscsi)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
@@ -1847,51 +1897,84 @@ cleanup_kubernetes() {
         # Note: These pods will be recreated by the system operator unless we scale down or delete the DaemonSets
         print_status "Cleaning up SSCSI driver pods and their controllers..."
         
-        # Delete SSCSI DaemonSets that might be recreating pods (by name since labels may not match)
-        oc delete daemonset secrets-store-csi-driver-node -n ${NAMESPACE} --ignore-not-found=true
-        oc delete daemonset -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true
-        oc delete daemonset -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true
+        # Delete SSCSI DaemonSets first (correct dependency order)
+        print_status "Deleting SSCSI DaemonSets..."
+        {
+            oc delete daemonset secrets-store-csi-driver-node -n ${NAMESPACE} --ignore-not-found=true
+        } &
         
-        # Delete the actual pods
+        {
+            oc delete daemonset -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true
+            oc delete daemonset -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true
+        } &
+        
+        # Wait for DaemonSet deletions to complete
+        wait
+        
+        # Then delete the actual pods
         if [ "$force_flag" = "--force" ]; then
             print_status "Force deleting SSCSI driver pods..."
-            oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true --force --grace-period=0
-            oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true --force --grace-period=0
+            {
+                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true --force --grace-period=0
+            } &
+            {
+                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true --force --grace-period=0
+            } &
         else
             print_status "Deleting SSCSI driver pods..."
-            oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true
-            oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true
+            {
+                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true
+            } &
+            {
+                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true
+            } &
         fi
+        
+        # Wait for pod deletions to complete
+        wait
     fi
     
     # Clean up ESO pods (only if no filter or filter is eso)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-        print_status "Cleaning up External Secrets Operator pods..."
+        print_progress "Cleaning up External Secrets Operator pods..."
         
-        # Delete deployments by name in external-secrets namespace (where the operator controller runs)
-        oc delete deployment external-secrets -n external-secrets --ignore-not-found=true
-        oc delete deployment external-secrets-cert-controller -n external-secrets --ignore-not-found=true
-        oc delete deployment external-secrets-webhook -n external-secrets --ignore-not-found=true
+        # Determine the correct ESO namespace
+        local eso_namespace="external-secrets-operator"
+        if ! oc get namespace "$eso_namespace" &>/dev/null; then
+            eso_namespace="external-secrets"
+        fi
         
-        # Also try deleting by labels in external-secrets namespace
-        oc delete deployment -n external-secrets -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
-        oc delete deployment -n external-secrets -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+        print_status "Using ESO namespace: $eso_namespace"
         
-        # Try external-secrets-operator namespace as well (just in case)
-        oc delete deployment -n external-secrets-operator -l app=external-secrets --ignore-not-found=true
-        oc delete deployment -n external-secrets-operator -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
-        oc delete deployment -n external-secrets-operator -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
-        oc delete deployment -n external-secrets-operator -l control-plane=controller-manager --ignore-not-found=true
+        # Delete deployments first (correct dependency order)
+        print_status "Deleting ESO deployments..."
+        {
+            oc delete deployment external-secrets -n "$eso_namespace" --ignore-not-found=true
+            oc delete deployment external-secrets-cert-controller -n "$eso_namespace" --ignore-not-found=true
+            oc delete deployment external-secrets-webhook -n "$eso_namespace" --ignore-not-found=true
+        } &
         
-        # Delete pods by labels in external-secrets namespace
-        oc delete pod -n external-secrets -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
-        oc delete pod -n external-secrets -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+        {
+            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
+            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
+            oc delete deployment -n "$eso_namespace" -l control-plane=controller-manager --ignore-not-found=true
+        } &
         
-        # Delete pods in external-secrets-operator namespace (just in case)
-        oc delete pod -n external-secrets-operator -l app=external-secrets --ignore-not-found=true
-        oc delete pod -n external-secrets-operator -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
-        oc delete pod -n external-secrets-operator -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
-        oc delete pod -n external-secrets-operator -l control-plane=controller-manager --ignore-not-found=true
+        # Wait for deployments to be deleted first
+        wait
+        
+        # Then delete pods
+        print_status "Deleting ESO pods..."
+        {
+            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
+            oc delete pod -n "$eso_namespace" -l control-plane=controller-manager --ignore-not-found=true
+        } &
+        
+        # Wait for pods to be deleted
+        wait
     fi
     
     # Note: We don't clean up the Red Hat system operator as it's part of OpenShift
@@ -1901,9 +1984,13 @@ cleanup_kubernetes() {
     
     # Clean up CSIDriver and ClusterCSIDriver resources (only for SSCSI)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_status "Cleaning up CSIDriver and ClusterCSIDriver resources..."
+        print_progress "Cleaning up CSIDriver and ClusterCSIDriver resources..."
         
-        # Delete ClusterCSIDriver first (this will stop the operator from recreating CSIDriver)
+        # Delete CSIDriver first (it's typically managed by ClusterCSIDriver)
+        print_status "Deleting CSIDriver..."
+        delete_with_finalizer_cleanup "csidriver" "secrets-store.csi.k8s.io"
+        
+        # Then delete ClusterCSIDriver (this will stop the operator from recreating CSIDriver)
         if oc get clustercsidriver secrets-store.csi.k8s.io &>/dev/null 2>&1; then
             print_status "Deleting ClusterCSIDriver..."
             oc delete clustercsidriver secrets-store.csi.k8s.io --ignore-not-found=true --timeout=30s || {
@@ -1912,279 +1999,167 @@ cleanup_kubernetes() {
                 force_delete_with_finalizers "clustercsidriver" "secrets-store.csi.k8s.io" || true
             }
         fi
-        
-        # Then delete CSIDriver
-        delete_with_finalizer_cleanup "csidriver" "secrets-store.csi.k8s.io"
     fi
     
     # Force cleanup SSCSI-related resources if force flag is enabled (only for SSCSI)
     if [ "$force_flag" = "--force" ] && ([ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]); then
-        print_status "Force cleaning SSCSI-related resources..."
-        # Force delete any remaining SSCSI deployments, daemonsets, and pods
-        force_delete_with_finalizers "deployment" "" "app=secrets-store-csi-driver"
-        force_delete_with_finalizers "daemonset" "" "app=secrets-store-csi-driver"
-        force_delete_with_finalizers "pod" "" "app=secrets-store-csi-driver"
+        print_progress "Force cleaning remaining SSCSI-related resources..."
         
-        # Force delete any remaining Azure provider resources
-        force_delete_with_finalizers "daemonset" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
-        force_delete_with_finalizers "pod" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
+        # Force delete deployments and daemonsets first (correct dependency order)
+        print_status "Force deleting SSCSI deployments and daemonsets..."
+        {
+            force_delete_with_finalizers "deployment" "" "app=secrets-store-csi-driver"
+            force_delete_with_finalizers "daemonset" "" "app=secrets-store-csi-driver"
+        } &
         
-        # Force delete any remaining SecretProviderClasses
-        force_delete_with_finalizers "secretproviderclass" "" ""
+        {
+            force_delete_with_finalizers "daemonset" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
+        } &
         
-        # Force delete any remaining secrets created by SSCSI
-        force_delete_with_finalizers "secret" "" "secrets-store.csi.k8s.io/managed=true"
+        # Wait for deployments/daemonsets to be deleted first
+        wait
+        
+        # Then force delete pods and other resources
+        print_status "Force deleting SSCSI pods and resources..."
+        {
+            force_delete_with_finalizers "pod" "" "app=secrets-store-csi-driver"
+            force_delete_with_finalizers "pod" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
+        } &
+        
+        {
+            force_delete_with_finalizers "secretproviderclass" "" ""
+            force_delete_with_finalizers "secret" "" "secrets-store.csi.k8s.io/managed=true"
+        } &
+        
+        # Wait for all force cleanup operations to complete
+        wait
         
         print_success "Force cleanup of SSCSI resources completed"
     fi
     
-    # Clean up Secrets Store CSI Driver Operator (only if no filter or filter is sscsi)
+    # Clean up operator deployments (these are handled after the operator lifecycle resources)
+    print_progress "Cleaning up operator deployments..."
+    
+    # Delete SSCSI operator deployment (only if no filter or filter is sscsi)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_status "Cleaning up Secrets Store CSI Driver Operator..."
-        
-        # Delete InstallPlan first (if exists)
-        oc delete installplan -n ${OPERATOR_NAMESPACE} -l operators.coreos.com/secrets-store-csi-driver-operator.openshift-cluster-csi-drivers --ignore-not-found=true
-        
-        # Delete operator Deployment if it exists
         oc delete deployment secrets-store-csi-driver-operator -n ${OPERATOR_NAMESPACE} --ignore-not-found=true
+    fi
+    
+    # Clean up OpenShift operators in correct order
+    print_progress "Cleaning up OpenShift operators..."
+    
+    # Helper function to delete CSV with progress bar
+    delete_csv_with_progress() {
+        local csv="$1"
+        local force_mode="$2"
+        local current="$3"
+        local total="$4"
         
-        # Delete Subscription and OperatorGroup
-    oc delete subscription secrets-store-csi-driver-operator -n ${OPERATOR_NAMESPACE} --ignore-not-found=true
+        if [ -z "$csv" ]; then
+            return 0
+        fi
+        
+        local csv_name=$(echo "$csv" | cut -d'/' -f2)
+        local csv_namespace=$(echo "$csv" | cut -d'/' -f1)
+        
+        # Show progress bar
+        show_csv_progress "$current" "$total" "$csv_name"
+        
+        if [ "$force_mode" = "true" ]; then
+            oc delete "$csv" --ignore-not-found=true --force --grace-period=0 &>/dev/null
+            
+            # If still stuck, remove finalizers
+            if oc get csv "$csv_name" -n "$csv_namespace" &>/dev/null 2>&1; then
+                force_delete_with_finalizers "csv" "$csv_namespace" "$csv_name" &>/dev/null
+            fi
+        else
+            oc delete "$csv" --ignore-not-found=true --timeout=30s &>/dev/null || {
+                oc delete "$csv" --ignore-not-found=true --force --grace-period=0 &>/dev/null || true
+                
+                # If still exists, remove finalizers
+                if oc get csv "$csv_name" -n "$csv_namespace" &>/dev/null 2>&1; then
+                    force_delete_with_finalizers "csv" "$csv_namespace" "$csv_name" &>/dev/null || true
+                fi
+            }
+        fi
+    }
+    
+    # Step 1: Delete CSVs first (they depend on OperatorGroups)
+    print_status "Step 1: Deleting ClusterServiceVersions (CSVs)..."
+    
+    # Delete ESO CSVs (only if no filter or filter is eso)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
+        print_status "Deleting External Secrets Operator CSVs..."
+        oc delete csv -A -l operators.coreos.com/openshift-external-secrets-operator --ignore-not-found=true || true
+        oc delete csv -A -l operators.coreos.com/external-secrets-operator --ignore-not-found=true || true
+    fi
+    
+    # Delete SSCSI CSVs (only if no filter or filter is sscsi)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
+        print_status "Deleting Secrets Store CSI Driver CSVs..."
+        # Delete by name pattern since labels don't work
+        local csv_names
+        csv_names=$(oc get csv -A -o name | grep "secrets-store-csi-driver-operator" | head -1 | cut -d'/' -f2 || true)
+        if [ -n "$csv_names" ]; then
+            print_status "Found SSCSI CSV: $csv_names"
+            
+            # Count total CSVs to delete for progress tracking
+            local total_csvs
+            total_csvs=$(oc get csv -A --field-selector metadata.name="$csv_names" --no-headers | wc -l)
+            
+            if [ "$total_csvs" -gt 0 ]; then
+                printf "Deleting $total_csvs CSV instances... "
+                oc delete csv -A --field-selector metadata.name="$csv_names" --ignore-not-found=true &>/dev/null || true
+                printf "✅ Done\n"
+            else
+                print_status "No SSCSI CSVs found to delete"
+            fi
+        else
+            print_status "No SSCSI CSVs found to delete"
+        fi
+    fi
+    
+    # Step 2: Delete Subscriptions (they depend on OperatorGroups)
+    print_status "Step 2: Deleting Subscriptions..."
+    
+    # Delete ESO subscriptions (only if no filter or filter is eso)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
+        oc delete subscription openshift-external-secrets-operator -n external-secrets-operator --ignore-not-found=true
+    fi
+    
+    # Delete SSCSI subscriptions (only if no filter or filter is sscsi)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
+        oc delete subscription secrets-store-csi-driver-operator -n ${OPERATOR_NAMESPACE} --ignore-not-found=true
+    fi
+    
+    # Step 3: Delete OperatorGroups (they manage CSVs and Subscriptions)
+    print_status "Step 3: Deleting OperatorGroups..."
+    
+    # Delete ESO OperatorGroups (only if no filter or filter is eso)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
+        oc delete operatorgroup external-secrets-operatorgroup -n external-secrets-operator --ignore-not-found=true
+    fi
+    
+    # Delete SSCSI OperatorGroups (only if no filter or filter is sscsi)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
         oc delete operatorgroup secrets-store-csi-driver-operator-og -n ${OPERATOR_NAMESPACE} --ignore-not-found=true
     fi
     
-    # Clean up External Secrets Operator (only if no filter or filter is eso)
-    if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-        print_status "Cleaning up External Secrets Operator..."
-        oc delete subscription openshift-external-secrets-operator -n external-secrets-operator --ignore-not-found=true
-        oc delete operatorgroup external-secrets-operatorgroup -n external-secrets-operator --ignore-not-found=true
-        
-        # Force cleanup ESO resources if force flag is enabled
-        if [ "$force_flag" = "--force" ]; then
-            print_status "Force cleaning External Secrets Operator resources..."
-            
-            # Force delete deployments by name in external-secrets namespace
-            oc delete deployment external-secrets -n external-secrets --ignore-not-found=true --force --grace-period=0 || true
-            oc delete deployment external-secrets-cert-controller -n external-secrets --ignore-not-found=true --force --grace-period=0 || true
-            oc delete deployment external-secrets-webhook -n external-secrets --ignore-not-found=true --force --grace-period=0 || true
-            
-            # Force delete any remaining ESO deployments and pods by labels in external-secrets namespace
-            force_delete_with_finalizers "deployment" "external-secrets" "app.kubernetes.io/instance=external-secrets"
-            force_delete_with_finalizers "deployment" "external-secrets" "app.kubernetes.io/name=external-secrets"
-            force_delete_with_finalizers "pod" "external-secrets" "app.kubernetes.io/instance=external-secrets"
-            force_delete_with_finalizers "pod" "external-secrets" "app.kubernetes.io/name=external-secrets"
-            
-            # Also try external-secrets-operator namespace (just in case)
-            force_delete_with_finalizers "deployment" "external-secrets-operator" "app=external-secrets"
-            force_delete_with_finalizers "deployment" "external-secrets-operator" "app.kubernetes.io/name=external-secrets"
-            force_delete_with_finalizers "pod" "external-secrets-operator" "app=external-secrets"
-            force_delete_with_finalizers "pod" "external-secrets-operator" "app.kubernetes.io/name=external-secrets-operator"
-            force_delete_with_finalizers "pod" "external-secrets-operator" "app.kubernetes.io/name=external-secrets"
-            
-            # Force delete any remaining ExternalSecrets and SecretStores
-            force_delete_with_finalizers "externalsecret" "" ""
-            force_delete_with_finalizers "secretstore" "" ""
-            
-            print_success "Force cleanup of ESO resources completed"
-        fi
+    # Step 4: Delete InstallPlans (they depend on Subscriptions)
+    print_status "Step 4: Deleting InstallPlans..."
+    
+    # Delete SSCSI InstallPlans (only if no filter or filter is sscsi)
+    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
+        oc delete installplan -n ${OPERATOR_NAMESPACE} -l operators.coreos.com/secrets-store-csi-driver-operator.openshift-cluster-csi-drivers --ignore-not-found=true
     fi
     
-    # Clean up ClusterServiceVersions (CSVs) from custom installations
-    print_status "Cleaning up custom ClusterServiceVersions..."
+    # Clean up namespaces
+    print_progress "Cleaning up namespaces..."
     
-    if [ "$force_flag" = "--force" ]; then
-        print_status "Force cleaning CSVs with finalizer removal..."
-        
-        # Force delete ESO CSVs (only if no filter or filter is eso)
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-            local eso_csvs
-            eso_csvs=$(oc get csv -A -o name | grep -E "openshift-external-secrets-operator|external-secrets-operator" || true)
-            if [ -n "$eso_csvs" ]; then
-                echo "$eso_csvs" | while read -r csv; do
-                    if [ -n "$csv" ]; then
-                        print_status "Force deleting CSV: $csv"
-                        oc delete "$csv" --ignore-not-found=true --force --grace-period=0
-                        
-                        # If still stuck, remove finalizers
-                        CSV_NAME=$(echo "$csv" | cut -d'/' -f2)
-                        CSV_NAMESPACE=$(echo "$csv" | cut -d'/' -f1)
-                        force_delete_with_finalizers "csv" "$CSV_NAMESPACE" "$CSV_NAME"
-                    fi
-                done
-            fi
-        fi
-        
-        # Force delete any remaining SSCSI CSVs (only if no filter or filter is sscsi)
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-            local sscsi_csvs
-            sscsi_csvs=$(oc get csv -A -o name | grep "secrets-store-csi-driver-operator" || true)
-            if [ -n "$sscsi_csvs" ]; then
-                echo "$sscsi_csvs" | while read -r csv; do
-                    if [ -n "$csv" ]; then
-                        print_status "Force deleting SSCSI CSV: $csv"
-                        CSV_NAME=$(echo "$csv" | cut -d'/' -f2)
-                        CSV_NAMESPACE=$(echo "$csv" | cut -d'/' -f1)
-                        
-                        # Try normal delete first
-                        oc delete "$csv" --ignore-not-found=true --timeout=30s || true
-                        
-                        # If still exists, force delete
-                        if oc get csv "$CSV_NAME" -n "$CSV_NAMESPACE" &>/dev/null 2>&1; then
-                            print_warning "CSV still exists after force delete, removing finalizers..."
-                            # Remove finalizers directly
-                            oc patch csv "$CSV_NAME" -n "$CSV_NAMESPACE" --type='merge' -p='{"metadata":{"finalizers":[]}}' 2>/dev/null || true
-                            # Try delete again
-                            oc delete csv "$CSV_NAME" -n "$CSV_NAMESPACE" --ignore-not-found=true --force --grace-period=0 2>/dev/null || true
-                        fi
-                    fi
-                done
-            fi
-        fi
-        
-        print_success "Force CSV cleanup completed"
-    else
-        # Delete ESO CSVs if no filter or filter is eso
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-            local eso_csvs
-            eso_csvs=$(oc get csv -A -o name | grep -E "openshift-external-secrets-operator|external-secrets-operator" || true)
-            if [ -n "$eso_csvs" ]; then
-                echo "$eso_csvs" | while read -r csv; do
-                    if [ -n "$csv" ]; then
-                        oc delete "$csv" --ignore-not-found=true
-                    fi
-                done
-            fi
-        fi
-        
-        # Delete SSCSI CSVs if no filter or filter is sscsi
-        # Note: We delete the CSV even though CRDs are managed by Red Hat system operator
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-            local sscsi_csvs
-            sscsi_csvs=$(oc get csv -A -o name 2>/dev/null | grep "secrets-store-csi-driver-operator" || true)
-            if [ -n "$sscsi_csvs" ]; then
-                echo "$sscsi_csvs" | while read -r csv; do
-                    if [ -n "$csv" ]; then
-                        CSV_NAME=$(echo "$csv" | cut -d'/' -f2)
-                        CSV_NAMESPACE=$(echo "$csv" | cut -d'/' -f1)
-                        print_status "Deleting SSCSI CSV: $csv"
-                        
-                        # Try normal delete first
-                        oc delete "$csv" --ignore-not-found=true --timeout=30s 2>&1 || true
-                        
-                        # Wait a moment and check if still exists
-                        sleep 2
-                        if oc get csv "$CSV_NAME" -n "$CSV_NAMESPACE" &>/dev/null 2>&1; then
-                            print_warning "CSV still exists, attempting force delete..."
-                            oc delete "$csv" --ignore-not-found=true --force --grace-period=0 2>&1 || true
-                            
-                            # Wait again and check
-                            sleep 2
-                            if oc get csv "$CSV_NAME" -n "$CSV_NAMESPACE" &>/dev/null 2>&1; then
-                                print_warning "CSV still stuck, removing finalizers..."
-                                force_delete_with_finalizers "csv" "$CSV_NAMESPACE" "$CSV_NAME" || true
-                            fi
-                        fi
-                    fi
-                done
-            fi
-        fi
-    fi
-    
-    # Clean up Custom Resource Definitions (CRDs) - Red Hat best practice
-    print_status "Cleaning up Custom Resource Definitions (CRDs)..."
-    
-    if [ "$force_flag" = "--force" ]; then
-        if [ -z "$operator_filter" ]; then
-            print_warning "Force mode: Deleting all SSCSI and ESO CRDs without confirmation"
-        elif [ "$operator_filter" = "eso" ]; then
-            print_warning "Force mode: Deleting ESO CRDs without confirmation"
-        elif [ "$operator_filter" = "sscsi" ]; then
-            print_warning "Force mode: Deleting SSCSI CRDs without confirmation"
-        fi
-        
-        # Delete CRDs from External Secrets Operator (only if no filter or filter is eso)
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-            print_status "Deleting External Secrets Operator CRDs..."
-            local eso_crds
-            eso_crds=$(oc get crd | grep -E "(external-secrets|externalsecrets.*)\.(operator\.openshift\.io|external-secrets\.io)" | awk '{print $1}' || true)
-            if [ -n "$eso_crds" ]; then
-                echo "$eso_crds" | while read -r crd; do
-                    if [ -n "$crd" ]; then
-                        force_delete_crd "$crd" 10
-                    fi
-                done
-            fi
-        fi
-        
-        # Delete CRDs from Secrets Store CSI Driver (only if no filter or filter is sscsi)
-        if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-            print_status "Force deleting Secrets Store CSI Driver CRDs..."
-            local sscsi_crds
-            sscsi_crds=$(oc get crd | grep "secrets-store.csi.x-k8s.io" | awk '{print $1}' || true)
-            if [ -n "$sscsi_crds" ]; then
-                echo "$sscsi_crds" | while read -r crd; do
-                    if [ -n "$crd" ]; then
-                        force_delete_crd "$crd" 10
-                    fi
-                done
-            fi
-        fi
-        
-        print_success "Force CRD cleanup completed"
-    else
-        print_warning "This will delete CRDs and all associated custom resources. Are you sure? (y/N)"
-        read -r response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
-            # Delete CRDs from External Secrets Operator (only if no filter or filter is eso)
-            if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
-                local eso_crds
-                eso_crds=$(oc get crd | grep -E "(external-secrets|externalsecrets.*)\.(operator\.openshift\.io|external-secrets\.io)" | awk '{print $1}' || true)
-                if [ -n "$eso_crds" ]; then
-                    echo "$eso_crds" | while read -r crd; do
-                        if [ -n "$crd" ]; then
-                            print_status "Deleting CRD: $crd"
-                            # Delete custom resources first
-                            delete_crd_resources "$crd"
-                            # Then delete CRD
-                            oc delete crd "$crd" --ignore-not-found=true --timeout=30s || {
-                                print_warning "CRD $crd deletion timed out or failed. Use --force flag for aggressive cleanup."
-                            }
-                        fi
-                    done
-                fi
-            fi
-            
-            # Delete SSCSI CRDs only if filter is sscsi (not by default as they're managed by Red Hat system operator)
-            if [ "$operator_filter" = "sscsi" ]; then
-                print_status "Deleting Secrets Store CSI Driver CRDs..."
-                local sscsi_crds
-                sscsi_crds=$(oc get crd | grep "secrets-store.csi.x-k8s.io" | awk '{print $1}' || true)
-                if [ -n "$sscsi_crds" ]; then
-                    echo "$sscsi_crds" | while read -r crd; do
-                        if [ -n "$crd" ]; then
-                            print_status "Deleting CRD: $crd"
-                            # Delete custom resources first
-                            delete_crd_resources "$crd"
-                            # Then delete CRD
-                            oc delete crd "$crd" --ignore-not-found=true --timeout=30s || {
-                                print_warning "CRD $crd deletion timed out or failed. Use --force flag for aggressive cleanup."
-                            }
-                        fi
-                    done
-                fi
-            else
-                # Note: We don't delete SSCSI CRDs as they're managed by the Red Hat system operator
-                print_status "Skipping SSCSI CRD cleanup (managed by Red Hat system operator)..."
-                print_info "Use --force flag to delete SSCSI CRDs: cleanup operators --force --sscsi"
-            fi
-        else
-            print_info "Skipping CRD cleanup"
-        fi
-    fi
-    
-    # Only delete namespace if it doesn't have openshift- prefix and if filtering for ESO or no filter
+    # Delete ESO namespace if it doesn't have openshift- prefix and if filtering for ESO or no filter
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
         if [[ ! "external-secrets-operator" =~ ^openshift- ]]; then
+            print_status "Cleaning up ESO namespace..."
             oc delete namespace external-secrets-operator --ignore-not-found=true
             force_delete_namespace "external-secrets-operator"
         else
@@ -2200,6 +2175,105 @@ cleanup_kubernetes() {
             force_delete_namespace "${OPERATOR_NAMESPACE}"
         else
             print_status "Skipping deletion of operator namespace '${OPERATOR_NAMESPACE}' (openshift- prefix preserved)"
+        fi
+    fi
+    
+    # Step 5: Clean up Custom Resource Definitions (CRDs) - Last step
+    print_progress "Cleaning up Custom Resource Definitions (CRDs)..."
+    
+    # Helper function to delete CRD with proper error handling
+    delete_crd() {
+        local crd="$1"
+        local force_mode="$2"
+        
+        if [ -z "$crd" ]; then
+            return 0
+        fi
+        
+        if [ "$force_mode" = "true" ]; then
+            print_status "Force deleting CRD: $crd"
+            force_delete_crd "$crd" 10
+        else
+            print_status "Deleting CRD: $crd"
+            # Remove finalizers first to prevent hanging
+            print_status "Removing finalizers from CRD: $crd"
+            oc patch crd "$crd" --type json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' --ignore-not-found=true 2>/dev/null || true
+            
+            # Then delete the CRD
+            print_status "Deleting CRD: $crd"
+            oc delete crd "$crd" --ignore-not-found=true --timeout=30s || {
+                print_warning "CRD $crd deletion timed out or failed. This may require manual cleanup."
+            }
+        fi
+    }
+    
+    if [ "$force_flag" = "--force" ]; then
+        if [ -z "$operator_filter" ]; then
+            print_warning "Force mode: Deleting all SSCSI and ESO CRDs without confirmation"
+        elif [ "$operator_filter" = "eso" ]; then
+            print_warning "Force mode: Deleting ESO CRDs without confirmation"
+        elif [ "$operator_filter" = "sscsi" ]; then
+            print_warning "Force mode: Deleting SSCSI CRDs without confirmation"
+        fi
+        
+        # Delete ESO CRDs in parallel (only if no filter or filter is eso)
+        if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
+            print_status "Deleting External Secrets Operator CRDs..."
+            local eso_crds
+            eso_crds=$(timeout 30 oc get crd --request-timeout=30s | grep -E "(external-secrets|externalsecrets)" | grep -v "secrets-store.csi" | awk '{print $1}' || true)
+            if [ -n "$eso_crds" ]; then
+                print_status "Found ESO CRDs: $(echo "$eso_crds" | tr '\n' ' ')"
+                while IFS= read -r crd; do
+                    delete_crd "$crd" "true" &
+                done <<< "$eso_crds"
+                wait
+            else
+                print_status "No ESO CRDs found to delete"
+            fi
+        fi
+        
+        # Delete SSCSI CRDs in parallel (only if no filter or filter is sscsi)
+        if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
+            print_status "Force deleting Secrets Store CSI Driver CRDs..."
+            local sscsi_crds
+            sscsi_crds=$(oc get crd | grep "secrets-store.csi.x-k8s.io" | awk '{print $1}' || true)
+            if [ -n "$sscsi_crds" ]; then
+                while IFS= read -r crd; do
+                    delete_crd "$crd" "true" &
+                done <<< "$sscsi_crds"
+                wait
+            fi
+        fi
+        
+        print_success "Force CRD cleanup completed"
+    else
+        # Delete ESO CRDs (only if no filter or filter is eso)
+        if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
+            print_status "Deleting External Secrets Operator CRDs..."
+            local eso_crds
+            eso_crds=$(timeout 30 oc get crd --request-timeout=30s | grep -E "(external-secrets|externalsecrets)" | grep -v "secrets-store.csi" | awk '{print $1}' || true)
+            if [ -n "$eso_crds" ]; then
+                print_status "Found ESO CRDs: $(echo "$eso_crds" | tr '\n' ' ')"
+                while IFS= read -r crd; do
+                    if [ -n "$crd" ]; then
+                        delete_crd "$crd" "false"
+                    fi
+                done <<< "$eso_crds"
+            else
+                print_status "No ESO CRDs found to delete"
+            fi
+        fi
+        
+        # Delete SSCSI CRDs (only if no filter or filter is sscsi)
+        if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
+            print_status "Deleting Secrets Store CSI Driver CRDs..."
+            local sscsi_crds
+            sscsi_crds=$(oc get crd | grep "secrets-store.csi.x-k8s.io" | awk '{print $1}' || true)
+            if [ -n "$sscsi_crds" ]; then
+                while IFS= read -r crd; do
+                    delete_crd "$crd" "false"
+                done <<< "$sscsi_crds"
+            fi
         fi
     fi
     
