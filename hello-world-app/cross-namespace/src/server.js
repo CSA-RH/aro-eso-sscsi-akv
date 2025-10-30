@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const url = require('url');
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 class CrossNamespaceWebapp extends HelloWorldWebapp {
     constructor(config) {
