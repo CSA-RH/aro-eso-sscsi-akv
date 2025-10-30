@@ -1940,27 +1940,27 @@ cleanup_kubernetes() {
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "eso" ]; then
         print_progress "Cleaning up External Secrets Operator pods..."
         
-        # Determine the correct ESO namespace
-        local eso_namespace="external-secrets-operator"
-        if ! oc get namespace "$eso_namespace" &>/dev/null; then
-            eso_namespace="external-secrets"
-        fi
+        # Clean up both ESO namespaces
+        local eso_operator_namespace="external-secrets-operator"
+        local eso_deployment_namespace="external-secrets"
         
-        print_status "Using ESO namespace: $eso_namespace"
+        print_status "Cleaning up ESO in both namespaces: $eso_operator_namespace and $eso_deployment_namespace"
         
         # Delete deployments first (correct dependency order)
         print_status "Deleting ESO deployments..."
         {
-            oc delete deployment external-secrets -n "$eso_namespace" --ignore-not-found=true
-            oc delete deployment external-secrets-cert-controller -n "$eso_namespace" --ignore-not-found=true
-            oc delete deployment external-secrets-webhook -n "$eso_namespace" --ignore-not-found=true
+            # Clean up deployments in external-secrets namespace
+            oc delete deployment external-secrets -n "$eso_deployment_namespace" --ignore-not-found=true
+            oc delete deployment external-secrets-cert-controller -n "$eso_deployment_namespace" --ignore-not-found=true
+            oc delete deployment external-secrets-webhook -n "$eso_deployment_namespace" --ignore-not-found=true
         } &
         
         {
-            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
-            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
-            oc delete deployment -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
-            oc delete deployment -n "$eso_namespace" -l control-plane=controller-manager --ignore-not-found=true
+            # Clean up deployments in external-secrets-operator namespace
+            oc delete deployment -n "$eso_operator_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
+            oc delete deployment -n "$eso_operator_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+            oc delete deployment -n "$eso_operator_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
+            oc delete deployment -n "$eso_operator_namespace" -l control-plane=controller-manager --ignore-not-found=true
         } &
         
         # Wait for deployments to be deleted first
@@ -1969,10 +1969,19 @@ cleanup_kubernetes() {
         # Then delete pods
         print_status "Deleting ESO pods..."
         {
-            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
-            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
-            oc delete pod -n "$eso_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
-            oc delete pod -n "$eso_namespace" -l control-plane=controller-manager --ignore-not-found=true
+            # Clean up pods in external-secrets namespace
+            oc delete pod -n "$eso_deployment_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_deployment_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_deployment_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
+            oc delete pod -n "$eso_deployment_namespace" -l control-plane=controller-manager --ignore-not-found=true
+        } &
+        
+        {
+            # Clean up pods in external-secrets-operator namespace
+            oc delete pod -n "$eso_operator_namespace" -l app.kubernetes.io/instance=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_operator_namespace" -l app.kubernetes.io/name=external-secrets --ignore-not-found=true
+            oc delete pod -n "$eso_operator_namespace" -l app.kubernetes.io/name=external-secrets-operator --ignore-not-found=true
+            oc delete pod -n "$eso_operator_namespace" -l control-plane=controller-manager --ignore-not-found=true
         } &
         
         # Wait for pods to be deleted
