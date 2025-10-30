@@ -2,7 +2,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 class CertificateTLSWebapp extends HelloWorldWebapp {
     constructor(config) {

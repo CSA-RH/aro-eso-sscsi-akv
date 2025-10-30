@@ -524,9 +524,6 @@ get_azure_env_vars() {
 get_csi_volume_mounts() {
     echo "- name: secrets-store
           mountPath: \"/etc/secrets\"
-          readOnly: true
-        - name: app-code
-          mountPath: /app/code
           readOnly: true"
 }
 
@@ -540,142 +537,10 @@ get_csi_volumes() {
           volumeAttributes:
             secretProviderClass: \"azure-keyvault-basic-secrets\"
           nodePublishSecretRef:
-            name: secrets-store-csi-driver-sp
-      - name: app-code
-        configMap:
-          name: hello-world-${app_type}-code
-          defaultMode: 0755"
+            name: secrets-store-csi-driver-sp"
 }
 
 
-# Deploy a webapp with custom server.js file
-deploy_custom_webapp() {
-    local app_type="$1"
-    local app_name="$2"
-    local method="$3"
-    local operator="$4"
-    local secret_strategy="$5"
-    local custom_server_path="$6"
-    local volume_mounts="${7:-}"
-    local volumes="${8:-}"
-    local env_variables="${9:-}"
-    local operator_label="${10:-}"
-    
-    print_status "Deploying $app_name..."
-    
-    # Common setup
-    build_app_image
-    
-    # Ensure app-specific namespace exists
-    local namespace=$(ensure_namespace "$app_type")
-    
-    if [ "$secret_strategy" = "azure-api" ] || [ "$secret_strategy" = "csi" ]; then
-        ensure_service_principal_secret "$namespace"
-    fi
-    
-    if [ "$secret_strategy" = "csi" ]; then
-        ensure_secretproviderclass "$namespace"
-    fi
-    
-    # Export variables for template substitution
-    export APP_TYPE="$app_type"
-    export APP_NAME="$app_name"
-    export METHOD="$method"
-    export OPERATOR="$operator"
-    export SECRET_STRATEGY="$secret_strategy"
-    export VOLUME_MOUNTS="$volume_mounts"
-    export VOLUMES="$volumes"
-    export ENVIRONMENT_VARIABLES="$env_variables"
-    # Ensure OPERATOR_LABEL is properly formatted for YAML
-    if [ -n "$operator_label" ]; then
-        export OPERATOR_LABEL="$operator_label"
-    else
-        export OPERATOR_LABEL=""
-    fi
-    export SERVICE_ACCOUNT_NAME="hello-world-${app_type}-sa"
-    export NAMESPACE="$namespace"
-    # Get the correct route domain from router canonical hostname
-    # Try to get from any existing route first
-    local router_host=$(oc get route --all-namespaces -o jsonpath='{.items[0].status.ingress[0].routerCanonicalHostname}' 2>/dev/null | head -1)
-    if [ -n "$router_host" ] && [ "$router_host" != "null" ]; then
-        # Extract domain from router hostname (e.g., router-default.apps.nhjhswvf... -> apps.nhjhswvf...)
-        export ROUTE_DOMAIN=$(echo "$router_host" | sed 's/^[^\.]*\.//')
-    else
-        # Fallback to default OpenShift route domain format
-        export ROUTE_DOMAIN="apps.nhjhswvf.swedencentral.aroapp.io"
-    fi
-    # Image is in hello-world-apps namespace, get full registry reference
-    # Get the best available image reference
-    export IMAGE_NAME=$(get_best_image_reference "hello-world-apps" "hello-world-apps")
-    
-    # Create ConfigMap with the custom server code
-    print_status "Creating ConfigMap with custom server code..."
-    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
-    local custom_server_file="${script_dir}/${custom_server_path}"
-    local webapp_framework_file="${script_dir}/shared/webapp-framework.js"
-    
-    # Create a temporary directory for the code
-    local temp_dir=$(mktemp -d)
-    cp "${custom_server_file}" "${temp_dir}/server.js"
-    cp "${webapp_framework_file}" "${temp_dir}/webapp-framework.js"
-    
-    # Create ConfigMap from the directory
-    oc create configmap "hello-world-${app_type}-code" \
-        --from-file="${temp_dir}" \
-        -n "${namespace}" \
-        --dry-run=client -o yaml | oc apply -f -
-    
-    # Clean up temp directory
-    rm -rf "${temp_dir}"
-    
-    # Apply the template
-    # Use envsubst with specific variables to avoid processing JavaScript template literals
-    local temp_yaml=$(mktemp)
-    print_status "Generating YAML template..."
-    
-    # Use a more controlled approach to avoid control character issues
-    local template_file="$(dirname "${BASH_SOURCE[0]}")/templates/custom-deployment-template.yaml"
-    
-    # First, let's check if the template file exists and is readable
-    if [ ! -f "${template_file}" ]; then
-        print_error "Template file not found: ${template_file}"
-        exit 1
-    fi
-    
-    # Use envsubst with only the variables we need, avoiding multi-line content
-    # Use the same approach that works manually - direct envsubst with all variables
-    envsubst '${APP_TYPE} ${APP_NAME} ${METHOD} ${OPERATOR} ${SECRET_STRATEGY} ${VOLUME_MOUNTS} ${VOLUMES} ${ENVIRONMENT_VARIABLES} ${OPERATOR_LABEL} ${SERVICE_ACCOUNT_NAME} ${NAMESPACE} ${ROUTE_DOMAIN} ${IMAGE_NAME}' < "${template_file}" > "${temp_yaml}"
-    
-    # Check if the file was created and has content
-    if [ ! -s "${temp_yaml}" ]; then
-        print_error "Generated YAML file is empty"
-        exit 1
-    fi
-    
-    print_status "Generated YAML file size: $(wc -c < "${temp_yaml}") bytes"
-    
-    # Skip Python YAML validation as it may not be available
-    print_status "Skipping Python YAML validation (module may not be available)"
-    
-    # Test with OpenShift
-    print_status "Testing YAML with OpenShift dry-run..."
-    if oc apply -f "${temp_yaml}" --dry-run=client >/dev/null 2>&1; then
-        print_status "OpenShift YAML validation passed, applying to cluster..."
-        oc apply -f "${temp_yaml}"
-    else
-        print_error "OpenShift YAML validation failed"
-        print_status "OpenShift validation error:"
-        oc apply -f "${temp_yaml}" --dry-run=client 2>&1 || true
-        print_status "First 20 lines of generated YAML:"
-        head -20 "${temp_yaml}"
-        exit 1
-    fi
-    
-    rm -f "${temp_yaml}"
-    
-    wait_for_deployment "$app_type" "$app_name" "$namespace"
-}
-    
     # Deploy CSI Driver webapp
 deploy_csi_driver() {
     deploy_webapp \
@@ -833,7 +698,8 @@ EOF
 
 # Deploy Certificate-Based TLS webapp
 deploy_certificate_tls() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "certificate-tls" \
         "Hello World - Certificate TLS" \
         "Certificate-Based TLS (CSI Driver)" \
@@ -848,12 +714,15 @@ deploy_certificate_tls() {
           value: \"/etc/secrets/ssl-cert\"
         - name: KEY_PATH
           value: \"/etc/secrets/ssl-key\"" \
-        "operator: sscsi"
+        "- name: secrets-store-csi-driver-sp
+          secretName: secrets-store-csi-driver-sp" \
+        "SSCSI"
 }
 
 # Deploy Hot Reload webapp
 deploy_hot_reload() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "hot-reload" \
         "Hello World - Hot Reload" \
         "Hot Reload (CSI Driver)" \
@@ -866,154 +735,210 @@ deploy_hot_reload() {
           value: \"/etc/secrets\"
         - name: RELOAD_INTERVAL
           value: \"5000\"" \
-        "operator: sscsi"
+        "- name: secrets-store-csi-driver-sp
+          secretName: secrets-store-csi-driver-sp" \
+        "SSCSI"
 }
 
 # Deploy Rotation Handler webapp
 deploy_rotation_handler() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "rotation-handler" \
         "Hello World - Rotation Handler" \
         "Secret Rotation Handler" \
         "" \
         "azure-api" \
         "rotation-handler/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-rotation-handler-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars "- name: ROTATION_CHECK_INTERVAL
           value: \"30000\"")" \
+        "" \
         ""
 }
 
 # Deploy Versioning Dashboard webapp
 deploy_versioning_dashboard() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "versioning-dashboard" \
         "Hello World - Versioning Dashboard" \
         "Secret Versioning Dashboard" \
         "" \
         "azure-api" \
         "versioning-dashboard/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-versioning-dashboard-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars)" \
+        "" \
         ""
 }
 
 # Deploy Multi-Vault webapp
 deploy_multi_vault() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "multi-vault" \
         "Hello World - Multi-Vault" \
         "Multi-Vault Access" \
         "" \
         "azure-api" \
         "multi-vault/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-multi-vault-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars "- name: VAULT_CONFIG
           value: \"primary:${KEYVAULT_URL},default:${KEYVAULT_URL}\"")" \
+        "" \
         ""
 }
     
 # Deploy Secret Expiration Monitor webapp
 deploy_expiration_monitor() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "expiration-monitor" \
         "Hello World - Secret Expiration Monitor" \
         "Secret Expiration Monitor" \
         "" \
         "azure-api" \
         "expiration-monitor/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-expiration-monitor-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars)" \
+        "" \
         ""
+}
+
+# Helper function to deploy custom webapps using template
+deploy_custom_webapp_with_template() {
+    local app_type="$1"
+    local app_name="$2"
+    local method="$3"
+    local operator="$4"
+    local secret_strategy="$5"
+    local custom_server_path="$6"
+    local volume_mounts="$7"
+    local volumes="$8"
+    local env_variables="$9"
+    local env_from_secrets="${10}"
+    local operator_label="${11}"
+    
+    print_status "Deploying $app_name..."
+    
+    # Build the Docker image first
+    build_app_image
+    
+    # Ensure namespace exists
+    local namespace=$(ensure_namespace "$app_type")
+    
+    # Ensure Service Principal secret exists for apps that need it
+    if [ "$secret_strategy" = "azure-api" ] || [ "$secret_strategy" = "csi" ]; then
+        ensure_service_principal_secret "$namespace"
+    fi
+    
+    # Ensure SecretProviderClass exists for CSI driver apps
+    if [ "$secret_strategy" = "csi" ]; then
+        ensure_secretproviderclass "$namespace"
+    fi
+    
+    # Create ConfigMap with the custom server code
+    print_status "Creating ConfigMap with custom server code..."
+    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    local custom_server_file="${script_dir}/${custom_server_path}"
+    local webapp_framework_file="${script_dir}/shared/webapp-framework.js"
+    
+    # Create a temporary directory for the code
+    local temp_dir=$(mktemp -d)
+    cp "${custom_server_file}" "${temp_dir}/server.js"
+    cp "${webapp_framework_file}" "${temp_dir}/webapp-framework.js"
+    
+    # Create ConfigMap from the directory
+    oc create configmap "hello-world-${app_type}-code" \
+        --from-file="${temp_dir}" \
+        -n "${namespace}" \
+        --dry-run=client -o yaml | oc apply -f -
+    
+    # Clean up temp directory
+    rm -rf "${temp_dir}"
+    
+    # Deploy using template
+    print_status "Deploying using template..."
+    local image_name="image-registry.openshift-image-registry.svc:5000/hello-world-apps/hello-world-apps@sha256:0b824005c882ad6ea19a742db2816cb82cc2e4ea36f6c6647b4927d0397d4921"
+    
+    # Export variables for template substitution
+    export APP_TYPE="$app_type"
+    export APP_NAME="$app_name"
+    export NAMESPACE="$namespace"
+    export IMAGE_NAME="$image_name"
+    export SERVICE_ACCOUNT_NAME="hello-world-${app_type}-sa"
+    export VOLUME_MOUNTS="$volume_mounts"
+    export VOLUMES="$volumes"
+    export ENVIRONMENT_VARIABLES="$env_variables"
+    export ENV_FROM_SECRETS="$env_from_secrets"
+    export OPERATOR_LABEL="$operator_label"
+    
+    # Use template with envsubst
+    envsubst '${APP_TYPE} ${APP_NAME} ${NAMESPACE} ${IMAGE_NAME} ${SERVICE_ACCOUNT_NAME} ${VOLUME_MOUNTS} ${VOLUMES} ${ENVIRONMENT_VARIABLES} ${ENV_FROM_SECRETS} ${OPERATOR_LABEL}' < "${script_dir}/templates/custom-webapp-template.yaml" | oc apply -f -
+    
+    wait_for_deployment "$app_type" "$app_name" "$namespace"
 }
 
 # Deploy Secret Audit Dashboard webapp
 deploy_audit_dashboard() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "audit-dashboard" \
         "Hello World - Secret Audit Dashboard" \
         "Secret Audit Dashboard" \
         "" \
         "azure-api" \
         "audit-dashboard/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-audit-dashboard-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars)" \
+        "" \
         ""
 }
 
 # Deploy Secret Validation Checker webapp
 deploy_validation_checker() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "validation-checker" \
         "Hello World - Secret Validation Checker" \
         "Secret Validation Checker" \
         "" \
         "azure-api" \
         "validation-checker/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-validation-checker-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars)" \
+        "" \
         ""
 }
 
 # Deploy Security Dashboard webapp
 deploy_security_dashboard() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "security-dashboard" \
         "Hello World - Security & Compliance Dashboard" \
         "Security & Compliance Dashboard" \
         "" \
         "azure-api" \
         "security-dashboard/src/server.js" \
-        "- name: app-code
-          mountPath: /app/code
-          readOnly: true" \
-        "- name: app-code
-        configMap:
-          name: hello-world-security-dashboard-code
-          defaultMode: 0755" \
+        "" \
+        "" \
         "$(get_azure_env_vars)" \
+        "" \
         ""
 }
 
 # Deploy Selective Secret Sync webapp
 deploy_selective_sync() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "selective-sync" \
         "Hello World - Selective Secret Sync" \
         "Selective Secret Sync" \
@@ -1022,9 +947,6 @@ deploy_selective_sync() {
         "selective-sync/src/server.js" \
         "- name: secrets-store
           mountPath: \"/etc/secrets\"
-          readOnly: true
-        - name: app-code
-          mountPath: /app/code
           readOnly: true" \
         "- name: secrets-store
         csi:
@@ -1033,11 +955,7 @@ deploy_selective_sync() {
           volumeAttributes:
             secretProviderClass: \"azure-keyvault-basic-secrets\"
           nodePublishSecretRef:
-            name: secrets-store-csi-driver-sp
-      - name: app-code
-        configMap:
-          name: hello-world-selective-sync-code
-          defaultMode: 0755" \
+            name: secrets-store-csi-driver-sp" \
         "- name: SECRETS_MOUNT_PATH
           value: \"/etc/secrets\"
         - name: SECRET_FILTER_INCLUDE
@@ -1048,12 +966,15 @@ deploy_selective_sync() {
           value: \"\"
         - name: SECRET_FILTER_SUFFIX
           value: \"\"" \
-        "operator: sscsi"
+        "- name: secrets-store-csi-driver-sp
+          secretName: secrets-store-csi-driver-sp" \
+        "SSCSI"
 }
 
 # Deploy Cross-Namespace Secret Sharing webapp
 deploy_cross_namespace() {
-    deploy_custom_webapp \
+    # Use the new template-based approach
+    deploy_custom_webapp_with_template \
         "cross-namespace" \
         "Hello World - Cross-Namespace Secret Sharing" \
         "Cross-Namespace Secret Sharing" \
@@ -1062,9 +983,6 @@ deploy_cross_namespace() {
         "cross-namespace/src/server.js" \
         "- name: secrets-store
           mountPath: \"/etc/secrets\"
-          readOnly: true
-        - name: app-code
-          mountPath: /app/code
           readOnly: true" \
         "- name: secrets-store
         csi:
@@ -1073,11 +991,7 @@ deploy_cross_namespace() {
           volumeAttributes:
             secretProviderClass: \"azure-keyvault-basic-secrets\"
           nodePublishSecretRef:
-            name: secrets-store-csi-driver-sp
-      - name: app-code
-        configMap:
-          name: hello-world-cross-namespace-code
-          defaultMode: 0755" \
+            name: secrets-store-csi-driver-sp" \
         "- name: SECRETS_MOUNT_PATH
           value: \"/etc/secrets\"
         - name: SHARED_NAMESPACES
@@ -1092,7 +1006,9 @@ deploy_cross_namespace() {
             secretKeyRef:
               name: api-credentials
               key: key" \
-        "operator: sscsi"
+        "- name: secrets-store-csi-driver-sp
+          secretName: secrets-store-csi-driver-sp" \
+        "SSCSI"
 }
 
     # Deploy Red Hat External Secrets Operator webapp
