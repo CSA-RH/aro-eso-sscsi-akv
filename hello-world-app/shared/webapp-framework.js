@@ -167,7 +167,7 @@ class HelloWorldWebapp {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🌍 Hello World App</h1>
+            <h1>${this.APP_NAME}</h1>
             <h2>${this.METHOD} ${badgeHtml}</h2>
             <p>This application consumes secrets from Azure Key Vault via ${this.METHOD}</p>
         </div>
@@ -273,7 +273,7 @@ class HelloWorldWebapp {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🌍 Hello World App</h1>
+            <h1>${this.APP_NAME}</h1>
             <h2>${this.METHOD} ${badgeHtml}</h2>
             <p>This application consumes secrets from Azure Key Vault via ${this.METHOD}</p>
         </div>

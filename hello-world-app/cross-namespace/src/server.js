@@ -339,380 +339,76 @@ roleRef:
     }
 
     getCustomHTML(localSecrets) {
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${this.appName}</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        // Use base HTML from framework but replace the Live Secrets section with RBAC content
+        const baseHTML = this.getHTML();
+        const rbacContent = this.getHTMLWithCrossNamespaceInfo(localSecrets);
         
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        .header {
-            text-align: center;
-            color: white;
-            margin-bottom: 30px;
-        }
-        
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        
-        .header p {
-            font-size: 1.2em;
-            opacity: 0.9;
-        }
-        
-        .method-info {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        
-        .method-info h2 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-            font-size: 1.8em;
-        }
-        
-        .method-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        .detail-card {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #007bff;
-        }
-        
-        .detail-card h3 {
-            color: #495057;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-        }
-        
-        .detail-card p {
-            color: #6c757d;
-            margin: 5px 0;
-        }
-        
-        .badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            font-weight: bold;
-            text-transform: uppercase;
-        }
-        
-        .badge-primary { background: #007bff; color: white; }
-        .badge-success { background: #28a745; color: white; }
-        .badge-danger { background: #dc3545; color: white; }
-        .badge-warning { background: #ffc107; color: #212529; }
-        
-        .rbac-demo {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        
-        .demo-scenario {
-            text-align: center;
-            margin-bottom: 30px;
-            padding: 20px;
-            background: #e3f2fd;
-            border-radius: 8px;
-        }
-        
-        .demo-scenario h3 {
-            color: #1976d2;
-            margin-bottom: 10px;
-        }
-        
-        .namespace-info {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        .info-card {
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .info-card.current-ns {
-            border-left: 4px solid #007bff;
-        }
-        
-        .info-card.permissions {
-            border-left: 4px solid #28a745;
-        }
-        
-        .namespace-name {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #007bff;
-            margin: 10px 0;
-        }
-        
-        .service-account {
-            color: #6c757d;
-            font-size: 0.9em;
-        }
-        
-        .permission-list {
-            margin-top: 15px;
-        }
-        
-        .permission-item {
-            padding: 8px 0;
-            border-bottom: 1px solid #e9ecef;
-        }
-        
-        .permission-item:last-child {
-            border-bottom: none;
-        }
-        
-        .permission-item.allowed {
-            color: #28a745;
-        }
-        
-        .permission-item.denied {
-            color: #dc3545;
-        }
-        
-        .rbac-scenarios {
-            margin: 30px 0;
-        }
-        
-        .scenarios-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        .scenario-card {
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .scenario-card.success {
-            background: #d4edda;
-            border-left: 4px solid #28a745;
-        }
-        
-        .scenario-card.denied {
-            background: #f8d7da;
-            border-left: 4px solid #dc3545;
-        }
-        
-        .scenario-card.warning {
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-        }
-        
-        .scenario-card h4 {
-            margin-bottom: 10px;
-        }
-        
-        .secret-example {
-            background: rgba(0,0,0,0.05);
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
-        
+        // Add RBAC-specific CSS to the base HTML
+        const customHTML = baseHTML.replace(
+            /<\/style>/,
+            `
+        /* RBAC-specific styles */
+        .rbac-demo { margin: 20px 0; }
+        .demo-scenario { text-align: center; margin-bottom: 30px; padding: 20px; background: #e3f2fd; border-radius: 8px; }
+        .demo-scenario h3 { color: #1976d2; margin-bottom: 10px; }
+        .namespace-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+        .info-card { padding: 20px; background: #f8f9fa; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .info-card.current-ns { border-left: 4px solid #007bff; }
+        .info-card.permissions { border-left: 4px solid #28a745; }
+        .namespace-name { font-size: 1.5em; font-weight: bold; color: #007bff; margin: 10px 0; }
+        .service-account { color: #6c757d; font-size: 0.9em; }
+        .permission-list { margin-top: 15px; }
+        .permission-item { padding: 8px 0; border-bottom: 1px solid #e9ecef; }
+        .permission-item:last-child { border-bottom: none; }
+        .permission-item.allowed { color: #28a745; }
+        .permission-item.denied { color: #dc3545; }
+        .rbac-scenarios { margin: 30px 0; }
+        .scenarios-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+        .scenario-card { padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .scenario-card.success { background: #d4edda; border-left: 4px solid #28a745; }
+        .scenario-card.denied { background: #f8d7da; border-left: 4px solid #dc3545; }
+        .scenario-card.warning { background: #fff3cd; border-left: 4px solid #ffc107; }
+        .scenario-card h4 { margin-bottom: 10px; }
+        .secret-example { background: rgba(0,0,0,0.05); padding: 10px; border-radius: 4px; margin-top: 10px; font-size: 0.9em; }
         .status-success { color: #28a745; font-weight: bold; }
         .status-denied { color: #dc3545; font-weight: bold; }
         .status-warning { color: #ffc107; font-weight: bold; }
+        .secrets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+        .secret-card { padding: 15px; border-radius: 8px; border-left: 4px solid; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .secret-card.local { background: #e7f3ff; border-color: #007bff; }
+        .secret-card.denied { background: #f8d7da; border-color: #dc3545; }
+        .secret-card.warning { background: #fff3cd; border-color: #ffc107; }
+        .secret-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .secret-meta { font-size: 0.9em; color: #6c757d; margin-bottom: 10px; }
+        .secret-value { font-family: monospace; word-break: break-all; font-size: 0.9em; }
+        .rbac-examples { margin: 30px 0; }
+        .example-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin: 20px 0; }
+        .tab-content { background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #e9ecef; }
+        .tab-content h4 { color: #495057; margin-bottom: 15px; }
+        .tab-content pre { background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; line-height: 1.4; }
+        .info-box { background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 30px 0; border-left: 4px solid #2196f3; }
+        .info-box h4 { color: #1976d2; margin-bottom: 15px; }
+        .info-box ul { margin: 10px 0; padding-left: 20px; }
+        .info-box li { margin: 8px 0; color: #424242; }
+        .info-box code { background: #e8f5e8; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; color: #2e7d32; }
+    </style>`
+        ).replace(
+            /<div id="secrets-container">[\s\S]*?<\/div>/,
+            `<div id="secrets-container">
+                ${rbacContent}
+            </div>`
+        ).replace(
+            /<button class="refresh-btn" onclick="refreshSecrets\(\)">\[REFRESH\] Refresh Secrets<\/button>/,
+            ''
+        ).replace(
+            /<script>[\s\S]*?<\/script>/,
+            `<script>
+                // RBAC dashboard doesn't need secret fetching functionality
+                console.log('RBAC Cross-Namespace Dashboard loaded');
+            </script>`
+        );
         
-        .secrets-section {
-            margin: 30px 0;
-        }
-        
-        .secrets-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        .secret-card {
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .secret-card.local {
-            background: #e7f3ff;
-            border-color: #007bff;
-        }
-        
-        .secret-card.denied {
-            background: #f8d7da;
-            border-color: #dc3545;
-        }
-        
-        .secret-card.warning {
-            background: #fff3cd;
-            border-color: #ffc107;
-        }
-        
-        .secret-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        
-        .secret-meta {
-            font-size: 0.9em;
-            color: #6c757d;
-            margin-bottom: 10px;
-        }
-        
-        .secret-value {
-            font-family: monospace;
-            word-break: break-all;
-            font-size: 0.9em;
-        }
-        
-        .rbac-examples {
-            margin: 30px 0;
-        }
-        
-        .example-tabs {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        .tab-content {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            border: 1px solid #e9ecef;
-        }
-        
-        .tab-content h4 {
-            color: #495057;
-            margin-bottom: 15px;
-        }
-        
-        .tab-content pre {
-            background: #2d3748;
-            color: #e2e8f0;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-            font-size: 0.85em;
-            line-height: 1.4;
-        }
-        
-        .info-box {
-            background: #e3f2fd;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 30px 0;
-            border-left: 4px solid #2196f3;
-        }
-        
-        .info-box h4 {
-            color: #1976d2;
-            margin-bottom: 15px;
-        }
-        
-        .info-box ul {
-            margin: 10px 0;
-            padding-left: 20px;
-        }
-        
-        .info-box li {
-            margin: 8px 0;
-            color: #424242;
-        }
-        
-        .info-box code {
-            background: #e8f5e8;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            color: #2e7d32;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>${this.appName}</h1>
-            <p>Demonstrating Kubernetes RBAC and Cross-Namespace Secret Access</p>
-        </div>
-        
-        <div class="method-info">
-            <h2>🔐 RBAC & Cross-Namespace Secret Access</h2>
-            <div class="method-details">
-                <div class="detail-card">
-                    <h3>Method</h3>
-                    <p><strong>Cross-Namespace Secret Sharing</strong></p>
-                    <p>Uses CSI Driver with RBAC-controlled access</p>
-                </div>
-                <div class="detail-card">
-                    <h3>Namespace</h3>
-                    <p><strong>${this.currentNamespace}</strong></p>
-                    <p>Current deployment namespace</p>
-                </div>
-                <div class="detail-card">
-                    <h3>Service Account</h3>
-                    <p><strong>hello-world-cross-namespace-sa</strong></p>
-                    <p>RBAC-controlled access</p>
-                </div>
-                <div class="detail-card">
-                    <h3>Secret Strategy</h3>
-                    <p><strong>CSI Driver</strong></p>
-                    <p>Mounted from Azure Key Vault</p>
-                </div>
-            </div>
-        </div>
-        
-        ${this.getHTMLWithCrossNamespaceInfo(localSecrets)}
-    </div>
-</body>
-</html>`;
+        return customHTML;
     }
 
     async handleRequest(req, res) {
