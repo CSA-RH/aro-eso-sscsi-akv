@@ -368,7 +368,7 @@ apply_example() {
     
     # Ensure required variables are set (from config.env)
     if [ -f "$(dirname "${BASH_SOURCE[0]}")/../config.env" ]; then
-        source "$(dirname "${BASH_SOURCE[0]}")/../config.env"
+        source "$(dirname "${BASH_SOURCE[0]}")/../config.env" >/dev/null 2>&1
     fi
     
     # Ensure namespace exists
