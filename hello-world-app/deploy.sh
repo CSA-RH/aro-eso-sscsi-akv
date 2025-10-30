@@ -543,24 +543,15 @@ get_csi_volumes() {
 
     # Deploy CSI Driver webapp
 deploy_csi_driver() {
-    deploy_webapp \
+    deploy_custom_webapp_with_template \
         "csi-driver" \
         "Hello World - CSI Driver" \
-        "Secrets Store CSI Driver" \
+        "csi-driver" \
         "" \
         "csi" \
-        "secretsMountPath: process.env.SECRETS_MOUNT_PATH || '/etc/secrets'," \
-        "- name: secrets-store
-          mountPath: \"/etc/secrets\"
-          readOnly: true" \
-        "- name: secrets-store
-        csi:
-          driver: secrets-store.csi.k8s.io
-          readOnly: true
-          volumeAttributes:
-            secretProviderClass: \"azure-keyvault-basic-secrets\"
-          nodePublishSecretRef:
-            name: secrets-store-csi-driver-sp" \
+        "csi-driver/src/server.js" \
+        "$(get_csi_volume_mounts)" \
+        "$(get_csi_volumes csi-driver)" \
         "- name: SECRETS_MOUNT_PATH
           value: \"/etc/secrets\"" \
         "" \
@@ -569,13 +560,13 @@ deploy_csi_driver() {
     
     # Deploy Direct Azure API webapp
 deploy_direct_api() {
-    deploy_webapp \
+    deploy_custom_webapp_with_template \
         "direct-api" \
         "Hello World - Direct Azure API" \
-        "Direct Azure Key Vault API" \
+        "direct-api" \
         "" \
         "azure-api" \
-        "keyvaultUrl: process.env.KEYVAULT_URL || 'https://test-jjohanss.vault.azure.net/'," \
+        "direct-api/src/server.js" \
         "" \
         "" \
         "- name: KEYVAULT_URL
@@ -658,25 +649,15 @@ EOF
     
     # For secret-sync, we need to also mount the CSI volume to trigger secret creation
     # even though the app itself only uses environment variables
-    deploy_webapp \
+    deploy_custom_webapp_with_template \
         "secret-sync" \
         "Hello World - Kubernetes Secret Sync" \
-        "Kubernetes Secret Sync" \
+        "secret-sync" \
         "" \
         "environment" \
-        "" \
-        "- name: secrets-store
-          mountPath: \"/etc/secrets\"
-          readOnly: true" \
-        "- name: secrets-store
-        csi:
-          driver: secrets-store.csi.k8s.io
-          readOnly: true
-          volumeAttributes:
-            secretProviderClass: \"azure-keyvault-basic-secrets\"
-          nodePublishSecretRef:
-            name: secrets-store-csi-driver-sp" \
-        "" \
+        "secret-sync/src/server.js" \
+        "$(get_csi_volume_mounts)" \
+        "$(get_csi_volumes secret-sync)" \
         "- name: DATABASE_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -1013,13 +994,13 @@ deploy_cross_namespace() {
 
     # Deploy Red Hat External Secrets Operator webapp
 deploy_external_secrets_redhat() {
-    deploy_webapp \
+    deploy_custom_webapp_with_template \
         "external-secrets-redhat" \
         "Hello World - Red Hat External Secrets Operator" \
-        "Red Hat External Secrets Operator" \
+        "external-secrets-redhat" \
         "RED HAT" \
         "environment" \
-        "" \
+        "external-secrets-redhat/src/server-optimized.js" \
         "" \
         "" \
         "- name: DATABASE_PASSWORD
