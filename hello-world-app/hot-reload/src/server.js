@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const HelloWorldWebapp = require('../../shared/webapp-framework');
+const HelloWorldWebapp = require('./webapp-framework');
 
 class HotReloadWebapp extends HelloWorldWebapp {
     constructor(config) {
