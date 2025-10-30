@@ -1,0 +1,16 @@
+apiVersion: operator.openshift.io/v1alpha1
+kind: ExternalSecrets
+metadata:
+  name: cluster
+spec:
+  controllerConfig:
+    namespace: external-secrets-operator
+  externalSecretsConfig:
+    logLevel: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 96Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi

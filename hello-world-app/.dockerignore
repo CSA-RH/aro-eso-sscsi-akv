@@ -1,0 +1,11 @@
+node_modules/
+.git/
+*.md
+csi-driver/
+direct-api/
+secret-sync/
+external-secrets-redhat/
+templates/
+deploy.sh
+.dockerignore
+

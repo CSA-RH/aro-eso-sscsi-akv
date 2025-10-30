@@ -1,0 +1,40 @@
+# Description: Namespace-based RBAC with shared secrets
+
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: azure-keyvault-namespace-rbac
+  namespace: ${TEST_NAMESPACE}
+  labels:
+    app: secrets-store-examples
+    component: secretproviderclass
+    example: namespace-based-rbac
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    useWorkloadIdentity: "false"
+    keyvaultName: "${ACTUAL_KEYVAULT_NAME}"
+    tenantId: "${AZURE_TENANT_ID}"
+    clientId: "${SERVICE_PRINCIPAL_CLIENT_ID}"
+    objects: |
+      array:
+        - |
+          objectName: "namespace-${TEST_NAMESPACE}-db-password"
+          objectType: "secret"
+          objectVersion: ""
+          objectAlias: "db-password"
+        - |
+          objectName: "namespace-${TEST_NAMESPACE}-api-key"
+          objectType: "secret"
+          objectVersion: ""
+          objectAlias: "api-key"
+        - |
+          objectName: "shared-readonly-config"
+          objectType: "secret"
+          objectVersion: ""
+          objectAlias: "shared-config"
+  nodePublishSecretRef:
+    name: secrets-store-csi-driver-sp
+

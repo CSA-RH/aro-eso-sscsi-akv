@@ -1,0 +1,30 @@
+# Test Pod Template
+# This template creates a test pod for validating SecretProviderClasses
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-${SPC_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: secrets-store-test
+    component: test-pod
+    example: ${EXAMPLE_TYPE}
+spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+  containers:
+  - name: test-container
+    image: registry.redhat.io/ubi8/ubi-minimal:latest
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: secrets-store
+      mountPath: "/mnt/secrets-store"
+      readOnly: true
+  volumes:
+  - name: secrets-store
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: "${SPC_NAME}"
+      ${NODE_PUBLISH_SECRET_REF}

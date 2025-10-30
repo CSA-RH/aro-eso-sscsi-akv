@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world-${APP_TYPE}
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+    component: webapp
+    method: ${APP_TYPE}
+    ${OPERATOR_LABEL}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world-${APP_TYPE}
+  template:
+    metadata:
+      labels:
+        app: hello-world-${APP_TYPE}
+        component: webapp
+        method: ${APP_TYPE}
+        ${OPERATOR_LABEL}
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      containers:
+      - name: webapp
+        image: ${IMAGE_NAME}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        command: ["node"]
+        args: ["code/server.js"]
+        volumeMounts:
+        ${VOLUME_MOUNTS}
+        env:
+        - name: APP_NAME
+          value: "${APP_NAME}"
+        - name: NAMESPACE
+          value: "${NAMESPACE}"
+        - name: PORT
+          value: "3000"
+        - name: NODE_PATH
+          value: "/app/node_modules"
+        ${ENVIRONMENT_VARIABLES}
+        workingDir: /app
+      volumes:
+      ${VOLUMES}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-${APP_TYPE}-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+spec:
+  selector:
+    app: hello-world-${APP_TYPE}
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${APP_TYPE}-route
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+    dashboard-type: monitoring
+    dashboard-category: ${APP_TYPE}
+    secret-method: ${SECRET_STRATEGY}
+spec:
+  host: ${APP_TYPE}.${ROUTE_DOMAIN}
+  to:
+    kind: Service
+    name: hello-world-${APP_TYPE}-service
+  port:
+    targetPort: 3000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+

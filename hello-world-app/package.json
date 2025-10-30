@@ -1,0 +1,24 @@
+{
+  "name": "hello-world-apps",
+  "version": "1.0.0",
+  "description": "Hello World applications demonstrating different secret management approaches",
+  "main": "shared/webapp-framework.js",
+  "scripts": {
+    "start": "node shared/webapp-framework.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.0.1",
+    "@azure/keyvault-secrets": "^4.7.0"
+  },
+  "keywords": [
+    "azure",
+    "keyvault",
+    "secrets",
+    "kubernetes",
+    "csi",
+    "external-secrets"
+  ],
+  "author": "",
+  "license": "MIT"
+}

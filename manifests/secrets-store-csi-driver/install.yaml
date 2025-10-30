@@ -1,0 +1,23 @@
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: secrets-store-csi-driver-operator-og
+  namespace: openshift-cluster-csi-drivers
+spec:
+  upgradeStrategy: Default
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  labels:
+    operators.coreos.com/secrets-store-csi-driver-operator.openshift-cluster-csi-drivers: ""
+  name: secrets-store-csi-driver-operator
+  namespace: openshift-cluster-csi-drivers
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: secrets-store-csi-driver-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  startingCSV: secrets-store-csi-driver-operator.v4.19.0-202510142112
+

@@ -1,0 +1,51 @@
+# Sensitive configuration files (but keep examples)
+config.env
+config.env.bak
+*.bak
+# DO NOT ignore *.env - we want config.env.example to be tracked
+
+# Kubernetes secrets and sensitive data
+**/secrets/*.yaml
+**/secrets/*.yml
+*-secret.yaml
+*-secret.yml
+
+# Service Principal credentials
+*principal*
+*sp-*
+*service-principal*
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Editor specific
+.vscode/
+.idea/
+*.sublime-*
+
+# Node modules (if any)
+node_modules/
+package-lock.json
+
+# Build artifacts
+build/
+dist/
+
+# Logs
+*.log
+logs/
+
+# Azure credentials (if any are accidentally added)
+*.pem
+*.key
+*.cert
+*-credentials*
+

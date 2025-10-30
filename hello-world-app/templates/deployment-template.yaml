@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world-${APP_TYPE}
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+    component: webapp
+    method: ${APP_TYPE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world-${APP_TYPE}
+  template:
+    metadata:
+      labels:
+        app: hello-world-${APP_TYPE}
+        component: webapp
+        method: ${APP_TYPE}
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      containers:
+      - name: webapp
+        image: ${IMAGE_NAME}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        command: ["node"]
+        args: ["code/server.js"]
+        volumeMounts:
+        - name: app-code
+          mountPath: /app/code
+          readOnly: true
+        ${VOLUME_MOUNTS}
+        env:
+        - name: APP_NAME
+          value: "${APP_NAME}"
+        - name: NAMESPACE
+          value: "${NAMESPACE}"
+        - name: PORT
+          value: "3000"
+        - name: NODE_PATH
+          value: "/app/node_modules"
+        ${ENVIRONMENT_VARIABLES}
+        ${ENV_FROM_SECRETS}
+        workingDir: /app
+      volumes:
+      - name: app-code
+        configMap:
+          name: hello-world-${APP_TYPE}-code
+          defaultMode: 0755
+      ${VOLUMES}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-${APP_TYPE}-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+spec:
+  selector:
+    app: hello-world-${APP_TYPE}
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${APP_TYPE}-route
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+    dashboard-type: monitoring
+    secret-method: ${SECRET_STRATEGY}
+spec:
+  host: ${APP_TYPE}.${ROUTE_DOMAIN}
+  to:
+    kind: Service
+    name: hello-world-${APP_TYPE}-service
+  port:
+    targetPort: 3000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-world-${APP_TYPE}-code
+  namespace: ${NAMESPACE}
+  labels:
+    app: hello-world-${APP_TYPE}
+data:
+  server-optimized.js: |
+    const HelloWorldWebapp = require('./webapp-framework');
+
+    const app = new HelloWorldWebapp({
+        appName: '${APP_NAME}',
+        method: '${METHOD}',
+        operator: '${OPERATOR}',
+        ${CONFIG_VARIABLES}
+        secretStrategy: '${SECRET_STRATEGY}'
+    });
+
+    app.start();
+  webapp-framework.js: |
+${WEBAPP_FRAMEWORK_CODE}
