@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-# Source configuration
-source "$(dirname "${BASH_SOURCE[0]}")/../config.env"
+# Source configuration (silently to avoid echoing config values)
+source "$(dirname "${BASH_SOURCE[0]}")/../config.env" >/dev/null 2>&1
 
 # Check cluster authentication and permissions
 check_cluster_auth() {
@@ -1485,7 +1485,7 @@ test_namespace_based_rbac() {
     
     # Ensure required variables are set
     if [ -f "$(dirname "${BASH_SOURCE[0]}")/../config.env" ]; then
-        source "$(dirname "${BASH_SOURCE[0]}")/../config.env"
+        source "$(dirname "${BASH_SOURCE[0]}")/../config.env" >/dev/null 2>&1
     fi
     
     # Initialize Azure values if not set
