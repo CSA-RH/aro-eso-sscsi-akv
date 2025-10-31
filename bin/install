@@ -2321,7 +2321,13 @@ cleanup_kubernetes() {
 
 # Clean up Azure resources
 cleanup_azure() {
-    print_header "Cleaning Up Azure Resources"
+    local secrets_only="${1:-false}"
+    
+    if [ "$secrets_only" = "true" ]; then
+        print_header "Cleaning Up Key Vault Secrets Only"
+    else
+        print_header "Cleaning Up Azure Resources"
+    fi
     
     print_warning "This will delete Azure resources with prefix '${AZURE_RESOURCE_PREFIX}' only."
     print_warning "Are you sure? (y/N)"
@@ -2348,29 +2354,34 @@ cleanup_azure() {
     
     print_info "Cleaning up resources with prefix: ${AZURE_RESOURCE_PREFIX}"
     print_info "Key Vault: ${ACTUAL_KEYVAULT_NAME}"
-    print_info "Service Principal: ${ACTUAL_SERVICE_PRINCIPAL_NAME}"
     
-    # Verify that resources have the prefix before deleting (safety check)
+    # Verify that Key Vault has the prefix before deleting (safety check)
     if [[ ! "${ACTUAL_KEYVAULT_NAME}" =~ ^${AZURE_RESOURCE_PREFIX} ]]; then
         print_error "Key Vault name '${ACTUAL_KEYVAULT_NAME}' does not start with prefix '${AZURE_RESOURCE_PREFIX}'"
         print_error "Refusing to delete - this may not be a resource created by this script"
         return 1
     fi
     
-    if [[ ! "${ACTUAL_SERVICE_PRINCIPAL_NAME}" =~ ^${AZURE_RESOURCE_PREFIX} ]]; then
-        print_error "Service Principal name '${ACTUAL_SERVICE_PRINCIPAL_NAME}' does not start with prefix '${AZURE_RESOURCE_PREFIX}'"
-        print_error "Refusing to delete - this may not be a resource created by this script"
-        return 1
+    # Only validate Service Principal if we're doing full cleanup (not secrets-only)
+    if [ "$secrets_only" != "true" ]; then
+        print_info "Service Principal: ${ACTUAL_SERVICE_PRINCIPAL_NAME}"
+        if [[ ! "${ACTUAL_SERVICE_PRINCIPAL_NAME}" =~ ^${AZURE_RESOURCE_PREFIX} ]]; then
+            print_error "Service Principal name '${ACTUAL_SERVICE_PRINCIPAL_NAME}' does not start with prefix '${AZURE_RESOURCE_PREFIX}'"
+            print_error "Refusing to delete - this may not be a resource created by this script"
+            return 1
+        fi
     fi
     
-    # Clean up role assignments first (before deleting Service Principal or Key Vault)
-    print_status "Cleaning up role assignments for Service Principal..."
-    
-    # Get Service Principal object ID (needed for role assignment cleanup)
-    # Only check Service Principals with our prefix
-    local sp_object_id=$(az ad sp show --id ${SERVICE_PRINCIPAL_CLIENT_ID} --query "id" -o tsv 2>/dev/null || echo "")
-    
-    if [ -n "$sp_object_id" ]; then
+    # Skip Service Principal and role assignment cleanup if only cleaning secrets
+    if [ "$secrets_only" != "true" ]; then
+        # Clean up role assignments first (before deleting Service Principal or Key Vault)
+        print_status "Cleaning up role assignments for Service Principal..."
+        
+        # Get Service Principal object ID (needed for role assignment cleanup)
+        # Only check Service Principals with our prefix
+        local sp_object_id=$(az ad sp show --id ${SERVICE_PRINCIPAL_CLIENT_ID} --query "id" -o tsv 2>/dev/null || echo "")
+        
+        if [ -n "$sp_object_id" ]; then
         # Key Vault scope for role assignments (only for Key Vaults with our prefix)
         local kv_scope="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.KeyVault/vaults/${ACTUAL_KEYVAULT_NAME}"
         
@@ -2422,13 +2433,30 @@ cleanup_azure() {
                 fi
             done
         fi
-    else
-        print_warning "Could not retrieve Service Principal object ID - skipping role assignment cleanup"
+        else
+            print_warning "Could not retrieve Service Principal object ID - skipping role assignment cleanup"
+        fi
     fi
     
     # Check if Key Vault exists before trying to clean it (only if it has our prefix)
     print_status "Checking if Key Vault exists..."
     if az keyvault show --name ${ACTUAL_KEYVAULT_NAME} --resource-group ${AZURE_RESOURCE_GROUP} &> /dev/null; then
+        # Clean up Key Vault secrets
+        print_status "Cleaning up Key Vault secrets..."
+        local secret_count=0
+        az keyvault secret list --vault-name ${ACTUAL_KEYVAULT_NAME} --query "[].name" -o tsv 2>/dev/null | while read -r secret; do
+            if [ -n "$secret" ]; then
+                print_status "  Deleting secret: $secret"
+                az keyvault secret delete --vault-name ${ACTUAL_KEYVAULT_NAME} --name "$secret" --only-show-errors 2>/dev/null || true
+                secret_count=$((secret_count + 1))
+            fi
+        done
+        
+        if [ "$secrets_only" = "true" ]; then
+            print_success "Key Vault secrets cleanup completed!"
+            return 0
+        fi
+        
         # Clean up Key Vault access policies (if using legacy method)
         print_status "Removing Key Vault access policies for Service Principal..."
         az keyvault delete-policy \
@@ -2437,19 +2465,19 @@ cleanup_azure() {
             --spn ${SERVICE_PRINCIPAL_CLIENT_ID} \
             --only-show-errors 2>/dev/null || true
         
-        # Clean up Key Vault secrets
-        print_status "Cleaning up Key Vault secrets..."
-        az keyvault secret list --vault-name ${ACTUAL_KEYVAULT_NAME} --query "[].name" -o tsv 2>/dev/null | while read -r secret; do
-            if [ -n "$secret" ]; then
-                az keyvault secret delete --vault-name ${ACTUAL_KEYVAULT_NAME} --name "$secret" --only-show-errors 2>/dev/null || true
-            fi
-        done
-        
         # Clean up Key Vault
         print_status "Cleaning up Key Vault..."
         az keyvault delete --name ${ACTUAL_KEYVAULT_NAME} --resource-group ${AZURE_RESOURCE_GROUP} --only-show-errors 2>/dev/null || true
     else
         print_info "Key Vault '${ACTUAL_KEYVAULT_NAME}' not found or already deleted"
+        if [ "$secrets_only" = "true" ]; then
+            return 0
+        fi
+    fi
+    
+    # Skip Service Principal and role assignment cleanup if only cleaning secrets
+    if [ "$secrets_only" = "true" ]; then
+        return 0
     fi
     
     # Clean up Service Principal (after role assignments are deleted)
@@ -2634,6 +2662,9 @@ show_help() {
             echo "  $0 cleanup operators --force     # Force cleanup with aggressive finalizer removal"
             echo "  $0 cleanup operators --eso       # Clean up External Secrets Operator only"
             echo "  $0 cleanup operators --sscsi     # Clean up Secrets Store CSI Driver only"
+            echo "  $0 cleanup azure                   # Clean up Azure resources only (Key Vault, Service Principal, etc.)"
+            echo "  $0 cleanup azure --secrets-only   # Clean up Key Vault secrets only (keep Key Vault and Service Principal)"
+            echo "  $0 cleanup local                   # Clean up local files only"
             echo "  $0 cleanup status                   # Show cleanup status"
     echo "  $0 validate                         # Validate installation"
 }
@@ -2734,6 +2765,7 @@ fi
         CLEANUP_TYPE="${1:-all}"
         FORCE_FLAG=""
         OPERATOR_FILTER=""
+        SECRETS_ONLY="false"
         
         # Parse remaining arguments for flags
         shift || true
@@ -2749,9 +2781,12 @@ fi
                 "--sscsi")
                     OPERATOR_FILTER="sscsi"
                     ;;
+                "--secrets-only")
+                    SECRETS_ONLY="true"
+                    ;;
                 *)
                     print_error "Unknown flag: $1"
-                    echo "Valid flags: --force, --eso, --sscsi"
+                    echo "Valid flags: --force, --eso, --sscsi, --secrets-only"
                     exit 1
                     ;;
             esac
@@ -2761,14 +2796,14 @@ fi
         case "$CLEANUP_TYPE" in
             "all")
                 cleanup_kubernetes "$FORCE_FLAG" "$OPERATOR_FILTER"
-                cleanup_azure
+                cleanup_azure "$SECRETS_ONLY"
                 cleanup_local
                 ;;
             "operators")
                 cleanup_kubernetes "$FORCE_FLAG" "$OPERATOR_FILTER"
                 ;;
             "azure")
-                cleanup_azure
+                cleanup_azure "$SECRETS_ONLY"
                 ;;
             "local")
                 cleanup_local
@@ -2781,6 +2816,7 @@ fi
                 echo "Valid options: all, operators, azure, local, status"
                 echo "Use --force flag for aggressive cleanup: cleanup operators --force"
                 echo "Use --eso or --sscsi to filter by operator: cleanup operators --eso"
+                echo "Use --secrets-only to only clean Key Vault secrets: cleanup azure --secrets-only"
                 exit 1
                 ;;
         esac
