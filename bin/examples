@@ -440,11 +440,12 @@ apply_example() {
                     sed "s/namespace: ${operator_namespace}/namespace: ${example_namespace}/" | \
                     sed '/^  resourceVersion:/d; /^  uid:/d; /^  selfLink:/d' | \
                     oc apply -f - 2>&1 || true
-                # Add labels for cleanup
+                # Add labels for cleanup and CSI driver requirement
                 oc label secret secrets-store-csi-driver-sp -n ${example_namespace} \
                     app=secrets-store-examples \
                     component=secret \
                     example="${basename}" \
+                    secrets-store.csi.k8s.io/used=true \
                     --overwrite 2>/dev/null || true
             else
                 # Create the secret directly using values from config.env
@@ -455,11 +456,12 @@ apply_example() {
                         --from-literal=clientsecret="${SERVICE_PRINCIPAL_CLIENT_SECRET}" \
                         -n ${example_namespace} \
                         --dry-run=client -o yaml | oc apply -f - 2>&1 || true
-                    # Add labels for cleanup
+                    # Add labels for cleanup and CSI driver requirement
                     oc label secret secrets-store-csi-driver-sp -n ${example_namespace} \
                         app=secrets-store-examples \
                         component=secret \
                         example="${basename}" \
+                        secrets-store.csi.k8s.io/used=true \
                         --overwrite 2>/dev/null || true
                     print_success "Service principal secret created"
                     # Wait briefly for secret to be fully propagated in the API
@@ -940,6 +942,8 @@ apply_operator_examples() {
                         sed "s/namespace: ${operator_namespace}/namespace: ${namespace}/" | \
                         sed '/^  resourceVersion:/d; /^  uid:/d; /^  selfLink:/d' | \
                         oc apply -f - 2>&1 || true
+                    # Label secret for CSI driver (required)
+                    oc label secret secrets-store-csi-driver-sp secrets-store.csi.k8s.io/used=true -n ${namespace} --overwrite 2>/dev/null || true
                     # Wait for secret to be propagated
                     sleep 2
                 elif [ -n "${SERVICE_PRINCIPAL_CLIENT_ID:-}" ] && [ -n "${SERVICE_PRINCIPAL_CLIENT_SECRET:-}" ]; then
@@ -948,6 +952,8 @@ apply_operator_examples() {
                         --from-literal=clientsecret="${SERVICE_PRINCIPAL_CLIENT_SECRET}" \
                         -n ${namespace} \
                         --dry-run=client -o yaml | oc apply -f - 2>&1 || true
+                    # Label secret for CSI driver (required)
+                    oc label secret secrets-store-csi-driver-sp secrets-store.csi.k8s.io/used=true -n ${namespace} --overwrite 2>/dev/null || true
                     # Wait for secret to be propagated
                     sleep 2
                 else
@@ -1271,11 +1277,12 @@ test_example() {
                     --from-literal=clientsecret="${SERVICE_PRINCIPAL_CLIENT_SECRET}" \
                     -n ${example_namespace} \
                     --dry-run=client -o yaml | oc apply -f - 2>&1 || true
-                # Add labels for cleanup
+                # Add labels for cleanup and CSI driver requirement
                 oc label secret secrets-store-csi-driver-sp -n ${example_namespace} \
                     app=secrets-store-examples \
                     component=secret \
                     example="${basename}" \
+                    secrets-store.csi.k8s.io/used=true \
                     --overwrite 2>/dev/null || true
             else
                 print_error "Service principal credentials not found in config.env"
@@ -1288,6 +1295,7 @@ test_example() {
                 app=secrets-store-examples \
                 component=secret \
                 example="${basename}" \
+                secrets-store.csi.k8s.io/used=true \
                 --overwrite 2>/dev/null || true
             # Small wait to ensure secret is fully propagated for rotation mechanism
             sleep 1
@@ -1845,6 +1853,7 @@ test_namespace_based_rbac() {
                 app=secrets-store-examples \
                 component=secret \
                 example="${example_name}" \
+                secrets-store.csi.k8s.io/used=true \
                 --overwrite 2>/dev/null || true
         fi
         

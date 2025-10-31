@@ -115,6 +115,14 @@ populate_basic_secrets() {
         --value "RedisSecurePassword456!" \
         --description "Redis cache password"
     
+    # Hello World secret
+    print_status "Creating hello-world-secret secret..."
+    az keyvault secret set \
+        --vault-name "$KEYVAULT_NAME" \
+        --name "hello-world-secret" \
+        --value "Hello World Secret from Azure Key Vault!" \
+        --description "Hello World secret for demo purposes"
+    
     print_status "Basic secrets created successfully"
 }
 
@@ -273,6 +281,7 @@ display_summary() {
     echo "  - api-key"
     echo "  - jwt-secret"
     echo "  - redis-password"
+    echo "  - hello-world-secret"
     echo "  - prod-database-password"
     echo "  - prod-api-key"
     echo "  - staging-database-password"
