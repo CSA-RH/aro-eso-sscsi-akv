@@ -1731,6 +1731,52 @@ cleanup_kubernetes() {
         printf "] %d%% (%d/%d) %s" $percentage $current $total "$csv_name"
     }
     
+    # Helper function to delete a single CSV by name and namespace
+    delete_single_csv() {
+        local csv_name="$1"
+        local namespace="$2"
+        local force_mode="${3:-false}"
+        local quiet="${4:-false}"
+        
+        if [ -z "$csv_name" ] || [ -z "$namespace" ]; then
+            return 1
+        fi
+        
+        if [ "$quiet" != "true" ]; then
+            if [ "$force_mode" = "true" ]; then
+                print_status "Deleting CSV $csv_name in namespace $namespace (force mode)..."
+            else
+                print_status "Deleting CSV $csv_name in namespace $namespace..."
+            fi
+        fi
+        
+        if [ "$force_mode" = "true" ]; then
+            oc delete csv "$csv_name" -n "$namespace" --ignore-not-found=true --force --grace-period=0 2>/dev/null || {
+                # If still stuck, remove finalizers
+                if oc get csv "$csv_name" -n "$namespace" &>/dev/null 2>&1; then
+                    force_delete_with_finalizers "csv" "$namespace" "$csv_name" &>/dev/null || true
+                fi
+            }
+        else
+            oc delete csv "$csv_name" -n "$namespace" --ignore-not-found=true --timeout=30s 2>/dev/null || {
+                oc delete csv "$csv_name" -n "$namespace" --ignore-not-found=true --force --grace-period=0 2>/dev/null || true
+                
+                # If still exists, remove finalizers
+                if oc get csv "$csv_name" -n "$namespace" &>/dev/null 2>&1; then
+                    force_delete_with_finalizers "csv" "$namespace" "$csv_name" &>/dev/null || true
+                fi
+            }
+        fi
+        
+        if [ "$quiet" != "true" ]; then
+            if [ "$force_mode" = "true" ]; then
+                print_success "Deleted CSV $csv_name (force mode)"
+            else
+                print_success "Deleted CSV $csv_name"
+            fi
+        fi
+    }
+    
     
     # Clean up SSCSI following official procedure (only for SSCSI or if no filter)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
@@ -2013,29 +2059,7 @@ cleanup_kubernetes() {
         csv_name=$(oc get csv -n openshift-cluster-csi-drivers -o name | grep "secrets-store-csi-driver-operator" | head -1 | cut -d'/' -f2 2>/dev/null || true)
         
         if [ -n "$csv_name" ]; then
-            if [ "$force_flag" = "--force" ]; then
-                # Force mode: delete with progress indication
-                print_status "Deleting CSV $csv_name (force mode)..."
-                oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --force --grace-period=0 2>/dev/null || {
-                    # If still stuck, remove finalizers
-                    if oc get csv "$csv_name" -n openshift-cluster-csi-drivers &>/dev/null 2>&1; then
-                        force_delete_with_finalizers "csv" "openshift-cluster-csi-drivers" "$csv_name" &>/dev/null || true
-                    fi
-                }
-                print_success "Deleted CSV $csv_name (force mode)"
-            else
-                # Normal mode: simple delete
-                print_status "Deleting CSV $csv_name..."
-                oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --timeout=30s 2>/dev/null || {
-                    oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --force --grace-period=0 2>/dev/null || true
-                    
-                    # If still exists, remove finalizers
-                    if oc get csv "$csv_name" -n openshift-cluster-csi-drivers &>/dev/null 2>&1; then
-                        force_delete_with_finalizers "csv" "openshift-cluster-csi-drivers" "$csv_name" &>/dev/null || true
-                    fi
-                }
-                print_success "Deleted CSV $csv_name"
-            fi
+            delete_single_csv "$csv_name" "openshift-cluster-csi-drivers" "$([ "$force_flag" = "--force" ] && echo "true" || echo "false")"
         else
             print_status "No SSCSI CSV found in openshift-cluster-csi-drivers namespace"
         fi
@@ -2123,19 +2147,29 @@ cleanup_kubernetes() {
             
             # Clean up orphaned ESO CSVs (cluster-scoped, won't cascade delete)
             # Only in normal mode (force mode already handled them)
+            # Only check if namespace is actually deleted (OLM may have already cleaned up CSVs)
             if [ "$force_flag" != "--force" ]; then
-                print_status "Cleaning up orphaned ESO CSVs..."
-                local orphaned_eso_csvs
-                orphaned_eso_csvs=$(oc get csv -A -o name 2>/dev/null | grep -E "(external-secrets|openshift-external-secrets)" || true)
-                if [ -n "$orphaned_eso_csvs" ]; then
-                    local total_orphaned
-                    total_orphaned=$(echo "$orphaned_eso_csvs" | wc -l | tr -d ' ')
-                    if [ "$total_orphaned" -gt 0 ]; then
-                        printf "Deleting %d orphaned ESO CSVs... " "$total_orphaned"
-                        local csv_list=$(echo "$orphaned_eso_csvs" | tr '\n' ' ')
-                        oc delete $csv_list --ignore-not-found=true --timeout=30s &>/dev/null || true
-                        printf "✅ Done\n"
+                # Verify namespace is actually gone before checking for orphaned CSVs
+                if ! oc get namespace external-secrets-operator &>/dev/null 2>&1; then
+                    local orphaned_eso_csvs
+                    orphaned_eso_csvs=$(oc get csv -A -o name 2>/dev/null | grep -E "(external-secrets|openshift-external-secrets)" || true)
+                    if [ -n "$orphaned_eso_csvs" ]; then
+                        local total_orphaned
+                        total_orphaned=$(echo "$orphaned_eso_csvs" | wc -l | tr -d ' ')
+                        if [ "$total_orphaned" -gt 0 ]; then
+                            print_status "Found $total_orphaned orphaned ESO CSV(s) after namespace deletion, cleaning up..."
+                            while IFS='/' read -r csv_namespace csv_name; do
+                                if [ -n "$csv_namespace" ] && [ -n "$csv_name" ]; then
+                                    delete_single_csv "$csv_name" "$csv_namespace" "false" "false"
+                                fi
+                            done <<< "$orphaned_eso_csvs"
+                            print_success "Deleted $total_orphaned orphaned ESO CSV(s)"
+                        fi
                     fi
+                    # If no orphaned CSVs found, don't print anything (OLM likely cleaned them up)
+                else
+                    # Namespace still exists, don't check for orphaned CSVs
+                    print_status "Namespace still exists, skipping orphaned CSV check"
                 fi
             fi
         else
