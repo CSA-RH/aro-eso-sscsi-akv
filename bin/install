@@ -6,8 +6,18 @@
 set -euo pipefail
 
 # Source configuration (if it exists)
-if [ -f "$(dirname "${BASH_SOURCE[0]}")/../config.env" ]; then
-source "$(dirname "${BASH_SOURCE[0]}")/../config.env"
+# Suppress echo output from config.env unless it's show or validate command
+COMMAND_PREVIEW="${1:-}"
+if [[ "$COMMAND_PREVIEW" == "show" ]] || [[ "$COMMAND_PREVIEW" == "validate" ]]; then
+    # Show config output for show/validate commands
+    if [ -f "$(dirname "${BASH_SOURCE[0]}")/../config.env" ]; then
+        source "$(dirname "${BASH_SOURCE[0]}")/../config.env"
+    fi
+else
+    # Suppress config output for all other commands
+    if [ -f "$(dirname "${BASH_SOURCE[0]}")/../config.env" ]; then
+        source "$(dirname "${BASH_SOURCE[0]}")/../config.env" >/dev/null 2>&1
+    fi
 fi
 
 # Colors for output (needed for check_cluster_auth)
