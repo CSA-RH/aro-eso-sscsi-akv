@@ -1,15 +1,21 @@
 # Test Pod Template
 # This template creates a test pod for validating SecretProviderClasses
+# Variables:
+#   POD_NAME - Name of the pod (e.g., test-azure-keyvault-basic-secrets)
+#   NAMESPACE - Namespace where the pod will be created
+#   EXAMPLE_BASENAME - Basename of the example (for labels)
+#   SERVICE_ACCOUNT_NAME - Service account name to use
+#   SECRET_PROVIDER_CLASS_NAME - Name of the SecretProviderClass to mount
+#   NODE_PUBLISH_SECRET_NAME - Name of the secret for node publish (default: secrets-store-csi-driver-sp)
 
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-${SPC_NAME}
+  name: ${POD_NAME}
   namespace: ${NAMESPACE}
   labels:
     app: secrets-store-test
-    component: test-pod
-    example: ${EXAMPLE_TYPE}
+    example: ${EXAMPLE_BASENAME}
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
@@ -26,5 +32,6 @@ spec:
       driver: secrets-store.csi.k8s.io
       readOnly: true
       volumeAttributes:
-        secretProviderClass: "${SPC_NAME}"
-      ${NODE_PUBLISH_SECRET_REF}
+        secretProviderClass: "${SECRET_PROVIDER_CLASS_NAME}"
+      nodePublishSecretRef:
+        name: ${NODE_PUBLISH_SECRET_NAME}

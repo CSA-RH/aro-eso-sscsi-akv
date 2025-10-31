@@ -133,7 +133,8 @@ check_example_requirements() {
             return 1
         fi
     # Check if it's an SSCSI example
-    elif [[ "$basename" == *"secret-sync"* ]] || [[ "$basename" == *"namespace-based-rbac"* ]]; then
+    # Match SSCSI examples: anything with "secret" (basic-secret-sync, mixed-secrets-sync, rotating-secrets) or namespace-based-rbac
+    elif [[ "$basename" == *"secret"* ]] || [[ "$basename" == *"namespace-based-rbac"* ]]; then
         if ! check_sscsi_operator; then
             print_warning "Skipping ${basename}: Secrets Store CSI Driver operator is not installed"
             print_info "Install it with: ./bin/install install --sscsi"
@@ -461,6 +462,8 @@ apply_example() {
                         example="${basename}" \
                         --overwrite 2>/dev/null || true
                     print_success "Service principal secret created"
+                    # Wait briefly for secret to be fully propagated in the API
+                    sleep 1
                 else
                     print_warning "Service principal credentials not found in config.env"
                     print_info "Example applied, but pods may not have access to Key Vault"
@@ -472,12 +475,12 @@ apply_example() {
         # Also ensure the service account exists with labels for cleanup
         print_status "Ensuring service account exists: ${example_sa}..."
         oc create serviceaccount ${example_sa} -n ${example_namespace} --dry-run=client -o yaml | oc apply -f - 2>/dev/null || true
-        # Add labels for cleanup
+        # Add labels for cleanup (suppress "not labeled" message if labels already exist)
         oc label serviceaccount ${example_sa} -n ${example_namespace} \
             app=secrets-store-examples \
             component=serviceaccount \
             example="${basename}" \
-            --overwrite 2>/dev/null || true
+            --overwrite 2>&1 | grep -v "not labeled" || true
     fi
     
     print_success "Example applied successfully!"
@@ -577,6 +580,130 @@ apply_all_examples() {
     fi
 }
 
+# Helper function to create a pod from template
+create_pod_from_template() {
+    local pod_name="$1"
+    local namespace="$2"
+    local example_basename="$3"
+    local service_account="$4"
+    local spc_name="$5"
+    local node_publish_secret="${6:-secrets-store-csi-driver-sp}"
+    
+    # Get template file path
+    local template_file="$(dirname "${BASH_SOURCE[0]}")/../manifests/templates/test-pod-template.yaml"
+    
+    if [ ! -f "$template_file" ]; then
+        print_error "Template file not found: $template_file"
+        return 1
+    fi
+    
+    # Export variables for envsubst
+    export POD_NAME="${pod_name}"
+    export NAMESPACE="${namespace}"
+    export EXAMPLE_BASENAME="${example_basename}"
+    export SERVICE_ACCOUNT_NAME="${service_account}"
+    export SECRET_PROVIDER_CLASS_NAME="${spc_name}"
+    export NODE_PUBLISH_SECRET_NAME="${node_publish_secret}"
+    
+    # Apply template with variable substitution
+    envsubst < "$template_file" | oc apply -f -
+}
+
+# Create a test pod for an SSCSI example to trigger secret creation
+create_sscsi_test_pod() {
+    local namespace="$1"
+    local spc_name="$2"
+    local basename="$3"
+    
+    # Extract operator from namespace (e.g., "sscsi" from "sscsi-basic-secret-sync")
+    local operator=$(echo "$namespace" | cut -d'-' -f1)
+    local example_sa="${operator}-${basename}-sa"
+    
+    # Ensure namespace has proper pod security level for CSI driver
+    oc label namespace ${namespace} pod-security.kubernetes.io/enforce=privileged --overwrite 2>/dev/null || true
+    oc label namespace ${namespace} pod-security.kubernetes.io/audit=privileged --overwrite 2>/dev/null || true
+    oc label namespace ${namespace} pod-security.kubernetes.io/warn=privileged --overwrite 2>/dev/null || true
+    
+    local pod_name="test-${spc_name}"
+    
+    # Check if pod already exists
+    if oc get pod ${pod_name} -n ${namespace} &>/dev/null 2>&1; then
+        print_info "Test pod ${pod_name} already exists in ${namespace}"
+        return 0
+    fi
+    
+    # Ensure the service principal secret exists and is accessible before creating the pod
+    print_status "Verifying service principal secret exists and is ready..."
+    local secret_ready=false
+    local max_wait=15
+    local waited=0
+    
+    while [ $waited -lt $max_wait ]; do
+        if oc get secret secrets-store-csi-driver-sp -n ${namespace} &>/dev/null 2>&1; then
+            # Verify the secret has the required keys and can be read
+            local clientid=$(oc get secret secrets-store-csi-driver-sp -n ${namespace} -o jsonpath='{.data.clientid}' 2>/dev/null || echo "")
+            local clientsecret=$(oc get secret secrets-store-csi-driver-sp -n ${namespace} -o jsonpath='{.data.clientsecret}' 2>/dev/null || echo "")
+            
+            if [ -n "$clientid" ] && [ -n "$clientsecret" ]; then
+                # Double-check by trying to read the full secret object
+                if oc get secret secrets-store-csi-driver-sp -n ${namespace} -o json &>/dev/null 2>&1; then
+                    secret_ready=true
+                    break
+                fi
+            fi
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    
+    if [ "$secret_ready" = false ]; then
+        print_error "Service principal secret 'secrets-store-csi-driver-sp' not found or not ready in namespace ${namespace}"
+        print_info "The secret should have been created when applying the example"
+        print_info "Please run './bin/examples apply ${basename}' to ensure the secret is created first"
+        return 1
+    fi
+    
+    # Additional wait to ensure secret is fully propagated to all nodes/CSI drivers
+    print_status "Waiting for secret to be fully propagated (3s)..."
+    sleep 3
+    
+    print_status "Creating test pod ${pod_name} to trigger secret creation..."
+    
+    create_pod_from_template "${pod_name}" "${namespace}" "${basename}" "${example_sa}" "${spc_name}"
+    
+    # Wait for pod to be ready (with shorter timeout for batch operations)
+    print_status "Waiting for pod to be ready (timeout: 30s)..."
+    if timeout 35 oc wait --for=condition=ready pod/${pod_name} -n ${namespace} --timeout=30s 2>&1 | grep -v "not labeled"; then
+        print_success "Pod ${pod_name} is ready and secrets should be mounted"
+        
+        # Give CSI driver a moment to mount secrets
+        sleep 2
+        
+        # Check if secrets were created (from secretObjects in SPC)
+        print_status "Checking for created Kubernetes secrets..."
+        local spc_output=$(oc get secretproviderclass ${spc_name} -n ${namespace} -o yaml 2>/dev/null || echo "")
+        if [ -n "$spc_output" ]; then
+            # Extract secret names from secretObjects
+            local secret_names=$(echo "$spc_output" | grep -A 20 "secretObjects:" | grep "secretName:" | awk '{print $2}' || echo "")
+            if [ -n "$secret_names" ]; then
+                for secret_name in $secret_names; do
+                    if oc get secret ${secret_name} -n ${namespace} &>/dev/null 2>&1; then
+                        print_success "  ✓ Kubernetes secret '${secret_name}' created"
+                    else
+                        print_warning "  ⚠ Kubernetes secret '${secret_name}' not yet created"
+                    fi
+                done
+            fi
+        fi
+        
+        return 0
+    else
+        print_warning "Pod ${pod_name} did not become ready within timeout"
+        print_info "Check pod status: oc get pod ${pod_name} -n ${namespace}"
+        return 1
+    fi
+}
+
 # Apply all examples for a specific operator
 apply_operator_examples() {
     local operator="$1"
@@ -615,6 +742,7 @@ apply_operator_examples() {
     local skipped_count=0
     local examples_root="$(dirname "${BASH_SOURCE[0]}")/../examples"
     local example_dir=""
+    local applied_examples=()  # Store namespace:spc_name:basename for SSCSI pod creation
     
     if [[ "$operator" == "sscsi" ]]; then
         example_dir="$examples_root/sscsi"
@@ -627,12 +755,24 @@ apply_operator_examples() {
         return 1
     fi
     
+    # First, apply all examples
     for file in "$example_dir"/*.yaml; do
         if [ -f "$file" ]; then
             local basename=$(basename "$file" .yaml)
             print_status "Applying $basename..."
-            if apply_example "$basename" 2>&1; then
+            
+            # Apply example (let output display normally)
+            if apply_example "$basename"; then
                 applied_count=$((applied_count + 1))
+                
+                # Construct namespace and extract SPC name from file
+                local example_namespace="${operator}-${basename}"
+                local spc_name=$(grep -E "^metadata:" -A 5 "$file" | grep -E "^\s+name:" | awk '{print $2}' || echo "")
+                
+                # For SSCSI, store for later pod creation
+                if [[ "$operator" == "sscsi" ]] && [ -n "$spc_name" ]; then
+                    applied_examples+=("${example_namespace}:${spc_name}:${basename}")
+                fi
             else
                 skipped_count=$((skipped_count + 1))
                 print_warning "Failed to apply $basename, continuing with next example..."
@@ -640,6 +780,57 @@ apply_operator_examples() {
             echo ""
         fi
     done
+    
+    # For SSCSI examples, create test pods to trigger secret creation
+    if [[ "$operator" == "sscsi" ]] && [ ${#applied_examples[@]} -gt 0 ]; then
+        echo ""
+        print_header "Creating Test Pods to Trigger Secret Creation"
+        print_info "Test pods are needed to mount volumes and create Kubernetes secrets"
+        
+        local pods_created=0
+        for example_info in "${applied_examples[@]}"; do
+            IFS=':' read -r namespace spc_name basename <<< "$example_info"
+            
+            # Ensure the service principal secret exists before creating pod
+            # This might not have been created if apply_example skipped it
+            if ! oc get secret secrets-store-csi-driver-sp -n ${namespace} &>/dev/null 2>&1; then
+                print_warning "Service principal secret missing in ${namespace}, creating it now..."
+                local operator_namespace="openshift-cluster-csi-drivers"
+                if oc get secret secrets-store-csi-driver-sp -n ${operator_namespace} &>/dev/null 2>&1; then
+                    oc get secret secrets-store-csi-driver-sp -n ${operator_namespace} -o yaml | \
+                        sed "s/namespace: ${operator_namespace}/namespace: ${namespace}/" | \
+                        sed '/^  resourceVersion:/d; /^  uid:/d; /^  selfLink:/d' | \
+                        oc apply -f - 2>&1 || true
+                    # Wait for secret to be propagated
+                    sleep 2
+                elif [ -n "${SERVICE_PRINCIPAL_CLIENT_ID:-}" ] && [ -n "${SERVICE_PRINCIPAL_CLIENT_SECRET:-}" ]; then
+                    oc create secret generic secrets-store-csi-driver-sp \
+                        --from-literal=clientid="${SERVICE_PRINCIPAL_CLIENT_ID}" \
+                        --from-literal=clientsecret="${SERVICE_PRINCIPAL_CLIENT_SECRET}" \
+                        -n ${namespace} \
+                        --dry-run=client -o yaml | oc apply -f - 2>&1 || true
+                    # Wait for secret to be propagated
+                    sleep 2
+                else
+                    print_error "Cannot create service principal secret: credentials not found"
+                    print_warning "Skipping pod creation for ${basename}"
+                    continue
+                fi
+            else
+                # Secret exists, but ensure it's fully propagated before creating pod
+                sleep 1
+            fi
+            
+            if create_sscsi_test_pod "$namespace" "$spc_name" "$basename"; then
+                pods_created=$((pods_created + 1))
+            fi
+            echo ""
+        done
+        
+        if [ $pods_created -gt 0 ]; then
+            print_success "Created ${pods_created} test pod(s) to trigger secret creation"
+        fi
+    fi
     
     if [ $skipped_count -gt 0 ]; then
         print_info "Applied ${applied_count} example(s), skipped ${skipped_count} example(s)"
@@ -943,37 +1134,17 @@ test_example() {
         fi
     fi
     
-    # Create test pod
-    print_status "Creating test pod..."
-    cat <<EOF | envsubst | oc apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test-${actual_spc_name}
-  namespace: ${example_namespace}
-  labels:
-    app: secrets-store-test
-    example: ${actual_spc_name}
-spec:
-  serviceAccountName: ${example_sa}
-  containers:
-  - name: test-container
-    image: registry.redhat.io/ubi8/ubi-minimal:latest
-    command: ["sleep", "3600"]
-    volumeMounts:
-    - name: secrets-store
-      mountPath: "/mnt/secrets-store"
-      readOnly: true
-  volumes:
-  - name: secrets-store
-    csi:
-      driver: secrets-store.csi.k8s.io
-      readOnly: true
-      volumeAttributes:
-        secretProviderClass: "${actual_spc_name}"
-      nodePublishSecretRef:
-        name: secrets-store-csi-driver-sp
-EOF
+    # Create test pod - use create_sscsi_test_pod for SSCSI examples to ensure secret verification
+    if [[ "$operator" == "sscsi" ]]; then
+        create_sscsi_test_pod "${example_namespace}" "${actual_spc_name}" "${basename}"
+    else
+        # For non-SSCSI examples (though this shouldn't normally happen here)
+        print_status "Creating test pod..."
+        local pod_name="test-${actual_spc_name}"
+        create_pod_from_template "${pod_name}" "${example_namespace}" "${basename}" "${example_sa}" "${actual_spc_name}"
+    fi
+    
+    local pod_name="test-${actual_spc_name}"
     
     # Wait for pod to be ready
     print_status "Waiting for test pod to be ready (timeout: 10s)..."
@@ -1156,35 +1327,7 @@ test_secret_rotation() {
     
     # Recreate the pod
     print_status "Recreating pod with updated secrets..."
-    cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${pod_name}
-  namespace: ${namespace}
-  labels:
-    app: secrets-store-test
-    example: rotation-test
-spec:
-  serviceAccountName: ${service_account}
-  containers:
-  - name: test-container
-    image: registry.redhat.io/ubi8/ubi-minimal:latest
-    command: ["sleep", "3600"]
-    volumeMounts:
-    - name: secrets-store
-      mountPath: "/mnt/secrets-store"
-      readOnly: true
-  volumes:
-  - name: secrets-store
-    csi:
-      driver: secrets-store.csi.k8s.io
-      readOnly: true
-      volumeAttributes:
-        secretProviderClass: "${spc_name}"
-      nodePublishSecretRef:
-        name: secrets-store-csi-driver-sp
-EOF
+    create_pod_from_template "${pod_name}" "${namespace}" "rotating-secrets" "${service_account}" "${spc_name}"
     
     # Wait for pod to be ready
     print_status "Waiting for pod to be ready (timeout: 30s)..."
@@ -1563,36 +1706,8 @@ test_namespace_based_rbac() {
         print_status "Creating test pod in namespace: ${ns}..."
         local sa="${ns}-sa"
         
-        cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test-rbac-${ns}
-  namespace: ${ns}
-  labels:
-    app: secrets-store-test
-    example: namespace-based-rbac
-    namespace: ${ns}
-spec:
-  serviceAccountName: ${sa}
-  containers:
-  - name: test-container
-    image: registry.redhat.io/ubi8/ubi-minimal:latest
-    command: ["sleep", "3600"]
-    volumeMounts:
-    - name: secrets-store
-      mountPath: "/mnt/secrets-store"
-      readOnly: true
-  volumes:
-  - name: secrets-store
-    csi:
-      driver: secrets-store.csi.k8s.io
-      readOnly: true
-      volumeAttributes:
-        secretProviderClass: "${actual_spc_name}"
-      nodePublishSecretRef:
-        name: secrets-store-csi-driver-sp
-EOF
+        local pod_name="test-rbac-${ns}"
+        create_pod_from_template "${pod_name}" "${ns}" "namespace-based-rbac" "${sa}" "${actual_spc_name}"
         
         # Wait for pod to be ready
         print_status "Waiting for pod in ${ns} to be ready (timeout: 15s)..."
