@@ -1,6 +1,6 @@
-# Azure Key Vault Secrets Store CSI Driver for OpenShift
+# Azure Key Vault - Secrets Store CSI Driver and External Secrets Operator for OpenShift (ARO)
 
-Integrate Azure Key Vault with OpenShift using the Secrets Store CSI Driver. This project provides multiple approaches to secret management, from direct API calls to Kubernetes-native secret synchronization, with comprehensive monitoring and security dashboards.
+Integrate Azure Key Vault with OpenShift using the Secrets Store CSI Driver and External Secrets Operator. This project provides multiple approaches to secret management, from direct API calls to Kubernetes-native secret synchronization, with comprehensive monitoring and security dashboards.
 
 ## Quick Start
 
@@ -446,6 +446,9 @@ Examples for:
 - OpenShift monitoring integration
 - Real-time security and compliance monitoring
 
+## License
+
+This project is provided as-is for OpenShift integration tests to Azure Key Vault.
 
 ## About Me
 
@@ -455,13 +458,3 @@ Specialist Adoption Architect at Red Hat
 I specialize in helping organizations successfully adopt and optimize OpenShift deployments. This project was created to demonstrate Azure Key Vault integration with OpenShift using the Secrets Store CSI Driver and External Secrets Operator.
 
 Connect with me for OpenShift architecture guidance, best practices, and advanced monitoring solutions.
-
-## License
-
-This project is provided as-is for OpenShift integration tests to Azure Key Vault.
-
-## Support
-
-- Check the troubleshooting section above
-- Review OpenShift and Azure documentation
-- Open an issue for bugs or feature requests
