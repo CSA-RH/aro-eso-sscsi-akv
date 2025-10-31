@@ -1,0 +1,65 @@
+# Test Job Template
+# This template creates a test Job for validating SecretProviderClasses
+# Note: Kubernetes secrets created via secretObjects will be deleted when the Job completes
+# For persistent secrets, use a Deployment or keep the pod running
+# Variables:
+#   JOB_NAME - Name of the job (e.g., test-azure-keyvault-basic-secrets)
+#   NAMESPACE - Namespace where the job will be created
+#   EXAMPLE_BASENAME - Basename of the example (for labels)
+#   SERVICE_ACCOUNT_NAME - Service account name to use
+#   SECRET_PROVIDER_CLASS_NAME - Name of the SecretProviderClass to mount
+#   NODE_PUBLISH_SECRET_NAME - Name of the secret for node publish (default: secrets-store-csi-driver-sp)
+#   VERIFY_TIMEOUT - Timeout in seconds to wait for secrets to be created (default: 30)
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: secrets-store-test
+    example: ${EXAMPLE_BASENAME}
+spec:
+  ttlSecondsAfterFinished: 300  # Clean up job 5 minutes after completion
+  template:
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      restartPolicy: Never
+      containers:
+      - name: verify-secrets
+        image: registry.redhat.io/ubi8/ubi-minimal:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for secrets to be mounted and created..."
+          timeout=${VERIFY_TIMEOUT:-30}
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            if [ -f /mnt/secrets-store/db-password ] || [ -f /mnt/secrets-store/api-key ] || [ -f /mnt/secrets-store/ssl-cert ]; then
+              echo "✓ Secrets mounted successfully"
+              ls -la /mnt/secrets-store/
+              # Wait a moment for Kubernetes secrets to be created
+              sleep 5
+              echo "✓ Job completed successfully"
+              exit 0
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+          done
+          echo "✗ Timeout waiting for secrets"
+          exit 1
+        volumeMounts:
+        - name: secrets-store
+          mountPath: "/mnt/secrets-store"
+          readOnly: true
+      volumes:
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "${SECRET_PROVIDER_CLASS_NAME}"
+          nodePublishSecretRef:
+            name: ${NODE_PUBLISH_SECRET_NAME}
+

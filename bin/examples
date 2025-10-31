@@ -609,6 +609,134 @@ create_pod_from_template() {
     envsubst < "$template_file" | oc apply -f -
 }
 
+# Helper function to create a deployment from template
+create_deployment_from_template() {
+    local deployment_name="$1"
+    local namespace="$2"
+    local example_basename="$3"
+    local service_account="$4"
+    local spc_name="$5"
+    local node_publish_secret="${6:-secrets-store-csi-driver-sp}"
+    local replicas="${7:-1}"
+    
+    # Get template file path
+    local template_file="$(dirname "${BASH_SOURCE[0]}")/../manifests/templates/test-deployment-template.yaml"
+    
+    if [ ! -f "$template_file" ]; then
+        print_error "Template file not found: $template_file"
+        return 1
+    fi
+    
+    # Export variables for envsubst
+    export DEPLOYMENT_NAME="${deployment_name}"
+    export NAMESPACE="${namespace}"
+    export EXAMPLE_BASENAME="${example_basename}"
+    export SERVICE_ACCOUNT_NAME="${service_account}"
+    export SECRET_PROVIDER_CLASS_NAME="${spc_name}"
+    export NODE_PUBLISH_SECRET_NAME="${node_publish_secret}"
+    # Ensure replicas is a number, default to 1
+    export REPLICAS="${replicas:-1}"
+    
+    # Apply template with variable substitution
+    envsubst < "$template_file" | oc apply -f -
+}
+
+# Create a test deployment for an SSCSI example to trigger secret creation
+# Similar to create_sscsi_test_pod but uses Deployment for better production-like behavior
+create_sscsi_test_deployment() {
+    local namespace="$1"
+    local spc_name="$2"
+    local basename="$3"
+    
+    # Extract operator from namespace (e.g., "sscsi" from "sscsi-basic-secret-sync")
+    local operator=$(echo "$namespace" | cut -d'-' -f1)
+    local example_sa="${operator}-${basename}-sa"
+    
+    # Ensure namespace has proper pod security level for CSI driver
+    oc label namespace ${namespace} pod-security.kubernetes.io/enforce=privileged --overwrite 2>/dev/null || true
+    oc label namespace ${namespace} pod-security.kubernetes.io/audit=privileged --overwrite 2>/dev/null || true
+    oc label namespace ${namespace} pod-security.kubernetes.io/warn=privileged --overwrite 2>/dev/null || true
+    
+    local deployment_name="secret-sync-${spc_name}"
+    
+    # Check if deployment already exists
+    if oc get deployment ${deployment_name} -n ${namespace} &>/dev/null 2>&1; then
+        print_info "Test deployment ${deployment_name} already exists in ${namespace}"
+        return 0
+    fi
+    
+    # Ensure the service principal secret exists and is accessible before creating the deployment
+    print_status "Verifying service principal secret exists and is ready..."
+    local secret_ready=false
+    local max_wait=15
+    local waited=0
+    
+    while [ $waited -lt $max_wait ]; do
+        if oc get secret secrets-store-csi-driver-sp -n ${namespace} &>/dev/null 2>&1; then
+            # Verify the secret has the required keys and can be read
+            local clientid=$(oc get secret secrets-store-csi-driver-sp -n ${namespace} -o jsonpath='{.data.clientid}' 2>/dev/null || echo "")
+            local clientsecret=$(oc get secret secrets-store-csi-driver-sp -n ${namespace} -o jsonpath='{.data.clientsecret}' 2>/dev/null || echo "")
+            
+            if [ -n "$clientid" ] && [ -n "$clientsecret" ]; then
+                # Double-check by trying to read the full secret object
+                if oc get secret secrets-store-csi-driver-sp -n ${namespace} -o json &>/dev/null 2>&1; then
+                    secret_ready=true
+                    break
+                fi
+            fi
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    
+    if [ "$secret_ready" = false ]; then
+        print_error "Service principal secret 'secrets-store-csi-driver-sp' not found or not ready in namespace ${namespace}"
+        print_info "The secret should have been created when applying the example"
+        print_info "Please run './bin/examples apply ${basename}' to ensure the secret is created first"
+        return 1
+    fi
+    
+    # Additional wait to ensure secret is fully propagated to all nodes/CSI drivers
+    print_status "Waiting for secret to be fully propagated (3s)..."
+    sleep 3
+    
+    print_status "Creating test deployment ${deployment_name} to trigger secret creation..."
+    
+    create_deployment_from_template "${deployment_name}" "${namespace}" "${basename}" "${example_sa}" "${spc_name}" "secrets-store-csi-driver-sp" "1"
+    
+    # Wait for deployment to be ready (with shorter timeout for batch operations)
+    print_status "Waiting for deployment to be ready (timeout: 30s)..."
+    if timeout 35 oc wait --for=condition=available deployment/${deployment_name} -n ${namespace} --timeout=30s 2>&1 | grep -v "not labeled"; then
+        print_success "Deployment ${deployment_name} is ready and secrets should be mounted"
+        
+        # Give CSI driver a moment to mount secrets
+        sleep 2
+        
+        # Check if secrets were created (from secretObjects in SPC)
+        print_status "Checking for created Kubernetes secrets..."
+        local spc_output=$(oc get secretproviderclass ${spc_name} -n ${namespace} -o yaml 2>/dev/null || echo "")
+        if [ -n "$spc_output" ]; then
+            # Extract secret names from secretObjects
+            local secret_names=$(echo "$spc_output" | grep -A 20 "secretObjects:" | grep "secretName:" | awk '{print $2}' || echo "")
+            if [ -n "$secret_names" ]; then
+                for secret_name in $secret_names; do
+                    if oc get secret ${secret_name} -n ${namespace} &>/dev/null 2>&1; then
+                        print_success "  ✓ Kubernetes secret '${secret_name}' created"
+                    else
+                        print_warning "  ⚠ Kubernetes secret '${secret_name}' not yet created"
+                    fi
+                done
+            fi
+        fi
+        
+        return 0
+    else
+        print_warning "Deployment ${deployment_name} did not become ready within timeout"
+        print_info "Check deployment status: oc get deployment ${deployment_name} -n ${namespace}"
+        return 1
+    fi
+}
+
 # Create a test pod for an SSCSI example to trigger secret creation
 create_sscsi_test_pod() {
     local namespace="$1"
@@ -707,6 +835,7 @@ create_sscsi_test_pod() {
 # Apply all examples for a specific operator
 apply_operator_examples() {
     local operator="$1"
+    local use_deployment="${2:-false}"  # Optional: use deployments instead of pods
     
     if [ -z "$operator" ]; then
         print_error "Please specify an operator: --sscsi or --eso"
@@ -781,17 +910,27 @@ apply_operator_examples() {
         fi
     done
     
-    # For SSCSI examples, create test pods to trigger secret creation
+    # For SSCSI examples, create test pods or deployments to trigger secret creation
     if [[ "$operator" == "sscsi" ]] && [ ${#applied_examples[@]} -gt 0 ]; then
         echo ""
-        print_header "Creating Test Pods to Trigger Secret Creation"
-        print_info "Test pods are needed to mount volumes and create Kubernetes secrets"
+        if [[ "$use_deployment" == "true" ]]; then
+            print_header "Creating Test Deployments to Trigger Secret Creation"
+            print_info "Test deployments are needed to mount volumes and create Kubernetes secrets"
+            print_info "Note: Deployments provide better resilience and auto-restart capabilities."
+            print_info "     Secrets persist as long as the Deployment exists."
+        else
+            print_header "Creating Test Pods to Trigger Secret Creation"
+            print_info "Test pods are needed to mount volumes and create Kubernetes secrets"
+            print_info "Note: Secrets created via secretObjects are owned by the pod."
+            print_info "     If pods are deleted, the secrets will also be deleted."
+            print_info "     Use --use-deployment for production-like behavior."
+        fi
         
-        local pods_created=0
+        local resources_created=0
         for example_info in "${applied_examples[@]}"; do
             IFS=':' read -r namespace spc_name basename <<< "$example_info"
             
-            # Ensure the service principal secret exists before creating pod
+            # Ensure the service principal secret exists before creating pod/deployment
             # This might not have been created if apply_example skipped it
             if ! oc get secret secrets-store-csi-driver-sp -n ${namespace} &>/dev/null 2>&1; then
                 print_warning "Service principal secret missing in ${namespace}, creating it now..."
@@ -813,22 +952,32 @@ apply_operator_examples() {
                     sleep 2
                 else
                     print_error "Cannot create service principal secret: credentials not found"
-                    print_warning "Skipping pod creation for ${basename}"
+                    print_warning "Skipping resource creation for ${basename}"
                     continue
                 fi
             else
-                # Secret exists, but ensure it's fully propagated before creating pod
+                # Secret exists, but ensure it's fully propagated before creating pod/deployment
                 sleep 1
             fi
             
-            if create_sscsi_test_pod "$namespace" "$spc_name" "$basename"; then
-                pods_created=$((pods_created + 1))
+            if [[ "$use_deployment" == "true" ]]; then
+                if create_sscsi_test_deployment "$namespace" "$spc_name" "$basename"; then
+                    resources_created=$((resources_created + 1))
+                fi
+            else
+                if create_sscsi_test_pod "$namespace" "$spc_name" "$basename"; then
+                    resources_created=$((resources_created + 1))
+                fi
             fi
             echo ""
         done
         
-        if [ $pods_created -gt 0 ]; then
-            print_success "Created ${pods_created} test pod(s) to trigger secret creation"
+        if [ $resources_created -gt 0 ]; then
+            if [[ "$use_deployment" == "true" ]]; then
+                print_success "Created ${resources_created} test deployment(s) to trigger secret creation"
+            else
+                print_success "Created ${resources_created} test pod(s) to trigger secret creation"
+            fi
         fi
     fi
     
@@ -860,6 +1009,9 @@ cleanup_examples() {
                 
                 # Clean up test pods using label selector
                 oc delete pod -l app=secrets-store-test -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+                
+                # Clean up test deployments using label selector
+                oc delete deployment -l app=secrets-store-sync -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
                 
                 # Clean up SecretProviderClasses using label selector
                 if oc api-resources | grep -q secretproviderclass; then
@@ -972,19 +1124,27 @@ cleanup_examples() {
     # Define operator namespaces to exclude from cleanup
     local operator_namespaces=("openshift-cluster-csi-drivers" "external-secrets-operator")
     
-    # Clean up test pods in any namespace (in case they weren't in example namespaces)
+    # Clean up test pods and deployments in any namespace (in case they weren't in example namespaces)
     # Exclude operator namespaces
     local test_pods_found=false
+    local test_deployments_found=false
     for ns in $(oc get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n'); do
         if [[ ! " ${operator_namespaces[@]} " =~ " ${ns} " ]]; then
             if oc get pod -l app=secrets-store-test -n "$ns" --no-headers 2>/dev/null | grep -q .; then
                 test_pods_found=true
                 oc delete pod -l app=secrets-store-test -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
             fi
+            if oc get deployment -l app=secrets-store-sync -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+                test_deployments_found=true
+                oc delete deployment -l app=secrets-store-sync -n "$ns" --ignore-not-found=true --wait=false 2>/dev/null || true
+            fi
         fi
     done
     if [ "$test_pods_found" = true ]; then
         print_status "Cleaned up orphaned test pods"
+    fi
+    if [ "$test_deployments_found" = true ]; then
+        print_status "Cleaned up orphaned test deployments"
     fi
     
     # Clean up SecretProviderClasses with example labels (excluding operator namespaces)
@@ -2021,6 +2181,7 @@ show_help() {
     echo "  apply <example>         - Apply a specific example"
     echo "  apply-all               - Apply all examples (skips missing operators)"
     echo "  apply --sscsi           - Apply all Secrets Store CSI Driver examples"
+    echo "  apply --sscsi --use-deployment  - Apply SSCSI examples using Deployments (production-like)"
     echo "  apply --eso             - Apply all External Secrets Operator examples"
     echo "  test <example>          - Test a specific example with a pod"
     echo "  cleanup                 - Clean up all examples and test resources"
@@ -2031,10 +2192,14 @@ show_help() {
     echo "  $0 apply basic-secret-sync"
     echo "  $0 apply examples/basic-secret-sync.yaml"
     echo "  $0 apply --sscsi"
+    echo "  $0 apply --sscsi --use-deployment"
     echo "  $0 apply --eso"
     echo "  $0 apply-all"
     echo "  $0 test basic-secret-sync"
     echo "  $0 cleanup"
+    echo ""
+    echo "Note: --use-deployment creates Deployments instead of Pods for better"
+    echo "      production-like behavior (auto-restart, resilience)."
     echo ""
     echo "Note: The script will automatically skip examples if their required operators"
     echo "      are not installed, with helpful installation instructions."
@@ -2069,7 +2234,12 @@ case "${1:-help}" in
                 
                 # Check if it's an operator flag
                 if [[ "$2" == "--sscsi" ]]; then
-                    apply_operator_examples "sscsi"
+                    # Check for optional --use-deployment flag
+                    use_deployment="false"
+                    if [[ "${3:-}" == "--use-deployment" ]]; then
+                        use_deployment="true"
+                    fi
+                    apply_operator_examples "sscsi" "$use_deployment"
                 elif [[ "$2" == "--eso" ]]; then
                     apply_operator_examples "eso"
                 else

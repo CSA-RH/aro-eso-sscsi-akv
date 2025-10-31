@@ -1,5 +1,14 @@
 # Test Pod Template
 # This template creates a test pod for validating SecretProviderClasses
+#
+# IMPORTANT: Kubernetes secrets created via secretObjects have this lifecycle:
+#   Secret → owned by SecretProviderClassPodStatus → owned by Pod
+#   When the pod is deleted, secrets are garbage collected.
+#   Therefore, pods must remain running for secrets to persist.
+#
+# For production use, consider using a Deployment instead of a Pod.
+# For quick validation, see test-job-template.yaml (secrets won't persist).
+#
 # Variables:
 #   POD_NAME - Name of the pod (e.g., test-azure-keyvault-basic-secrets)
 #   NAMESPACE - Namespace where the pod will be created

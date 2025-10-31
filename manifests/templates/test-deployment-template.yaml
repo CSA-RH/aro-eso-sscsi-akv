@@ -1,0 +1,62 @@
+# Test Deployment Template
+# This template creates a Deployment for validating SecretProviderClasses in production-like scenarios
+#
+# IMPORTANT: Kubernetes secrets created via secretObjects have this lifecycle:
+#   Secret → owned by SecretProviderClassPodStatus → owned by Pod
+#   When all pods in the deployment are deleted, secrets are garbage collected.
+#   However, Deployments maintain pods, so secrets persist as long as the Deployment exists.
+#
+# This is the recommended approach for production use because:
+#   - Secrets persist as long as the Deployment exists
+#   - Auto-restarts on failure
+#   - Better resource management
+#   - Standard Kubernetes pattern
+#
+# Variables:
+#   DEPLOYMENT_NAME - Name of the deployment (e.g., secret-sync-deployment)
+#   NAMESPACE - Namespace where the deployment will be created
+#   EXAMPLE_BASENAME - Basename of the example (for labels)
+#   SERVICE_ACCOUNT_NAME - Service account name to use
+#   SECRET_PROVIDER_CLASS_NAME - Name of the SecretProviderClass to mount
+#   NODE_PUBLISH_SECRET_NAME - Name of the secret for node publish (default: secrets-store-csi-driver-sp)
+#   REPLICAS - Number of replicas (default: 1)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${DEPLOYMENT_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: secrets-store-sync
+    example: ${EXAMPLE_BASENAME}
+spec:
+  replicas: ${REPLICAS}
+  selector:
+    matchLabels:
+      app: secrets-store-sync
+      example: ${EXAMPLE_BASENAME}
+  template:
+    metadata:
+      labels:
+        app: secrets-store-sync
+        example: ${EXAMPLE_BASENAME}
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      containers:
+      - name: secret-sync-container
+        image: registry.redhat.io/ubi8/ubi-minimal:latest
+        command: ["sleep", "infinity"]
+        volumeMounts:
+        - name: secrets-store
+          mountPath: "/mnt/secrets-store"
+          readOnly: true
+      volumes:
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "${SECRET_PROVIDER_CLASS_NAME}"
+          nodePublishSecretRef:
+            name: ${NODE_PUBLISH_SECRET_NAME}
+
