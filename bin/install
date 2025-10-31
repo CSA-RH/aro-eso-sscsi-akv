@@ -1732,9 +1732,56 @@ cleanup_kubernetes() {
     }
     
     
-    # Clean up Azure provider (only for SSCSI or if no filter)
+    # Clean up SSCSI following official procedure (only for SSCSI or if no filter)
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_progress "Cleaning up Azure provider..."
+        # Official SSCSI uninstall procedure:
+        # Step 1: Stop all application pods that use the secrets-store.csi.k8s.io provider
+        print_progress "Step 1: Stopping application pods using secrets-store.csi.k8s.io..."
+        print_status "Finding and stopping application pods that use secrets-store.csi.k8s.io driver..."
+        
+        # Find all pods using secrets-store.csi.k8s.io by checking volumes
+        local app_pods
+        app_pods=$(oc get pods --all-namespaces -o json 2>/dev/null | \
+            jq -r '.items[] | select(.spec.volumes[]? | .csi.driver == "secrets-store.csi.k8s.io") | "\(.metadata.namespace)/\(.metadata.name)"' 2>/dev/null || true)
+        
+        if [ -n "$app_pods" ]; then
+            local pod_count=$(echo "$app_pods" | wc -l | tr -d ' ')
+            print_status "Found $pod_count application pod(s) using secrets-store.csi.k8s.io, stopping them..."
+            
+            # Scale down deployments that use these pods
+            # Use process substitution to avoid subshell variable scope issues
+            while IFS='/' read -r namespace pod_name; do
+                if [ -n "$namespace" ] && [ -n "$pod_name" ]; then
+                    # Get deployment name from pod labels
+                    deployment=$(oc get pod "$pod_name" -n "$namespace" -o jsonpath='{.metadata.labels.app}' 2>/dev/null || echo "")
+                    if [ -n "$deployment" ]; then
+                        # Try to find deployment by app label
+                        deployment_name=$(oc get deployment -n "$namespace" -l app="$deployment" -o name 2>/dev/null | head -1 | cut -d'/' -f2 || echo "")
+                        if [ -n "$deployment_name" ]; then
+                            print_status "  Scaling down deployment $deployment_name in namespace $namespace..."
+                            oc scale deployment "$deployment_name" -n "$namespace" --replicas=0 --ignore-not-found=true 2>/dev/null || true
+                        fi
+                    fi
+                fi
+            done <<< "$app_pods"
+            
+            # Also delete pods directly if they still exist (in case they're not managed by deployments)
+            print_status "Deleting remaining application pods..."
+            while IFS='/' read -r namespace pod_name; do
+                if [ -n "$namespace" ] && [ -n "$pod_name" ]; then
+                    oc delete pod "$pod_name" -n "$namespace" --ignore-not-found=true --timeout=30s 2>/dev/null || true
+                fi
+            done <<< "$app_pods"
+            
+            # Wait a moment for pods to terminate
+            sleep 2
+            print_success "Stopped $pod_count application pod(s) using secrets-store.csi.k8s.io"
+        else
+            print_status "No application pods found using secrets-store.csi.k8s.io"
+        fi
+        
+        # Step 2: Remove the azure provider plugin
+        print_progress "Step 2: Removing Azure provider plugin..."
         
         # Delete DaemonSet first so pods don't get recreated
         oc delete daemonset csi-secrets-store-provider-azure -n ${NAMESPACE} --ignore-not-found=true
@@ -1758,19 +1805,31 @@ cleanup_kubernetes() {
         
         # Remove privileged SCC (optional - may fail if used by other resources)
         oc adm policy remove-scc-from-user privileged -z csi-secrets-store-provider-azure -n ${NAMESPACE} 2>/dev/null || true
-    fi
-    
-    # Clean up running pods created by operators
-    print_progress "Cleaning up operator-managed pods..."
-    
-    # Clean up SSCSI driver pods (only if no filter or filter is sscsi)
-    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        # Clean up SSCSI driver pods (these are managed by Red Hat system operator DaemonSets)
-        # Note: These pods will be recreated by the system operator unless we scale down or delete the DaemonSets
-        print_status "Cleaning up SSCSI driver pods and their controllers..."
         
-        # Delete SSCSI DaemonSets first (correct dependency order)
-        print_status "Deleting SSCSI DaemonSets..."
+        print_success "Removed Azure provider plugin"
+        
+        # Step 3: Remove the Container Storage Interface (CSI) driver and associated manifests ClusterCSIDriver
+        print_progress "Step 3: Removing CSI driver and ClusterCSIDriver..."
+        
+        # Delete ClusterCSIDriver first (this will stop the operator from recreating CSIDriver and DaemonSets)
+        if oc get clustercsidriver secrets-store.csi.k8s.io &>/dev/null 2>&1; then
+            print_status "Deleting ClusterCSIDriver..."
+            oc delete clustercsidriver secrets-store.csi.k8s.io --ignore-not-found=true --timeout=30s || {
+                print_warning "ClusterCSIDriver deletion timed out, attempting force delete..."
+                oc delete clustercsidriver secrets-store.csi.k8s.io --ignore-not-found=true --force --grace-period=0 || true
+                force_delete_with_finalizers "clustercsidriver" "secrets-store.csi.k8s.io" || true
+            }
+            print_success "Deleted ClusterCSIDriver"
+        else
+            print_status "ClusterCSIDriver not found (may already be deleted)"
+        fi
+        
+        # Delete CSIDriver (it's typically managed by ClusterCSIDriver, but delete it explicitly just in case)
+        print_status "Deleting CSIDriver..."
+        delete_with_finalizer_cleanup "csidriver" "secrets-store.csi.k8s.io"
+        
+        # Delete CSI driver DaemonSets (they may still exist after ClusterCSIDriver deletion)
+        print_status "Deleting CSI driver DaemonSets..."
         {
             oc delete daemonset secrets-store-csi-driver-node -n ${NAMESPACE} --ignore-not-found=true
         } &
@@ -1783,27 +1842,37 @@ cleanup_kubernetes() {
         # Wait for DaemonSet deletions to complete
         wait
         
-        # Then delete the actual pods
-        if [ "$force_flag" = "--force" ]; then
-            print_status "Force deleting SSCSI driver pods..."
-            {
-                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true --force --grace-period=0
-            } &
-            {
-                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true --force --grace-period=0
-            } &
+        print_success "Removed CSI driver and ClusterCSIDriver"
+        
+        # Step 4: Verify that the CSI driver pods are no longer running
+        print_progress "Step 4: Verifying CSI driver pods are no longer running..."
+        
+        local driver_pods
+        driver_pods=$(oc get pods --all-namespaces -l 'app in (secrets-store-csi-driver,secrets-store-csi-driver-node)' -o name 2>/dev/null || true)
+        
+        if [ -n "$driver_pods" ]; then
+            print_warning "Some CSI driver pods still exist, deleting them..."
+            # Convert newlines to spaces for oc delete command
+            local driver_pods_list=$(echo "$driver_pods" | tr '\n' ' ')
+            if [ "$force_flag" = "--force" ]; then
+                oc delete $driver_pods_list --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true
+            else
+                oc delete $driver_pods_list --ignore-not-found=true --timeout=30s 2>/dev/null || true
+            fi
+            
+            # Wait a moment and check again
+            sleep 2
+            driver_pods=$(oc get pods --all-namespaces -l 'app in (secrets-store-csi-driver,secrets-store-csi-driver-node)' -o name 2>/dev/null || true)
+            if [ -n "$driver_pods" ]; then
+                print_warning "Some CSI driver pods still exist after deletion attempt"
+            else
+                print_success "All CSI driver pods verified as stopped"
+            fi
         else
-            print_status "Deleting SSCSI driver pods..."
-            {
-                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver --ignore-not-found=true
-            } &
-            {
-                oc delete pod -n ${NAMESPACE} -l app=secrets-store-csi-driver-node --ignore-not-found=true
-            } &
+            print_success "Verified: No CSI driver pods are running"
         fi
         
-        # Wait for pod deletions to complete
-        wait
+        # Step 5 will be handled later in the operator cleanup section (CSV, Subscription, OperatorGroup, InstallPlan)
     fi
     
     # Clean up ESO (only if no filter or filter is eso)
@@ -1826,59 +1895,20 @@ cleanup_kubernetes() {
         print_status "Skipping Red Hat system operator cleanup (it's part of OpenShift)..."
     fi
     
-    # Clean up CSIDriver and ClusterCSIDriver resources (only for SSCSI)
-    if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_progress "Cleaning up CSIDriver and ClusterCSIDriver resources..."
-        
-        # Delete CSIDriver first (it's typically managed by ClusterCSIDriver)
-        print_status "Deleting CSIDriver..."
-        delete_with_finalizer_cleanup "csidriver" "secrets-store.csi.k8s.io"
-        
-        # Then delete ClusterCSIDriver (this will stop the operator from recreating CSIDriver)
-        if oc get clustercsidriver secrets-store.csi.k8s.io &>/dev/null 2>&1; then
-            print_status "Deleting ClusterCSIDriver..."
-            oc delete clustercsidriver secrets-store.csi.k8s.io --ignore-not-found=true --timeout=30s || {
-                print_warning "ClusterCSIDriver deletion timed out, attempting force delete..."
-                oc delete clustercsidriver secrets-store.csi.k8s.io --ignore-not-found=true --force --grace-period=0 || true
-                force_delete_with_finalizers "clustercsidriver" "secrets-store.csi.k8s.io" || true
-            }
-        fi
-    fi
-    
-    # Force cleanup SSCSI-related resources if force flag is enabled (only for SSCSI)
+    # Force cleanup remaining SSCSI-related resources if force flag is enabled (only for SSCSI)
+    # This cleans up SecretProviderClasses and managed secrets that might remain
     if [ "$force_flag" = "--force" ] && ([ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]); then
-        print_progress "Force cleaning remaining SSCSI-related resources..."
-        
-        # Force delete deployments and daemonsets first (correct dependency order)
-        print_status "Force deleting SSCSI deployments and daemonsets..."
-        {
-            force_delete_with_finalizers "deployment" "" "app=secrets-store-csi-driver"
-            force_delete_with_finalizers "daemonset" "" "app=secrets-store-csi-driver"
-        } &
-        
-        {
-            force_delete_with_finalizers "daemonset" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
-        } &
-        
-        # Wait for deployments/daemonsets to be deleted first
-        wait
-        
-        # Then force delete pods and other resources
-        print_status "Force deleting SSCSI pods and resources..."
-        {
-            force_delete_with_finalizers "pod" "" "app=secrets-store-csi-driver"
-            force_delete_with_finalizers "pod" "${NAMESPACE}" "app=csi-secrets-store-provider-azure"
-        } &
+        print_progress "Force cleaning remaining SSCSI-related resources (SecretProviderClasses, managed secrets)..."
         
         {
             force_delete_with_finalizers "secretproviderclass" "" ""
             force_delete_with_finalizers "secret" "" "secrets-store.csi.k8s.io/managed=true"
         } &
         
-        # Wait for all force cleanup operations to complete
+        # Wait for cleanup operations to complete
         wait
         
-        print_success "Force cleanup of SSCSI resources completed"
+        print_success "Force cleanup of remaining SSCSI resources completed"
     fi
     
     # Clean up operator deployments (these are handled after the operator lifecycle resources)
@@ -1890,7 +1920,8 @@ cleanup_kubernetes() {
     fi
     
     # Clean up OpenShift operators in correct order
-    print_progress "Cleaning up OpenShift operators..."
+    # For SSCSI, this is Step 5: Uninstall the operator (CSV, Subscription, OperatorGroup, InstallPlan)
+    print_progress "Cleaning up OpenShift operators (SSCSI Step 5: Uninstall operator)..."
     
     # Helper function to delete CSV with progress bar
     delete_csv_with_progress() {
@@ -1972,42 +2003,41 @@ cleanup_kubernetes() {
         fi
     fi
     
-    # Delete SSCSI CSVs (only if no filter or filter is sscsi)
+    # Delete SSCSI CSV (only if no filter or filter is sscsi)
+    # Only delete the CSV in the openshift-cluster-csi-drivers namespace
     if [ -z "$operator_filter" ] || [ "$operator_filter" = "sscsi" ]; then
-        print_status "Deleting Secrets Store CSI Driver CSVs..."
-        # Get all SSCSI CSVs
-        local sscsi_csvs
-        sscsi_csvs=$(oc get csv -A -o name | grep "secrets-store-csi-driver-operator" || true)
-        if [ -n "$sscsi_csvs" ]; then
-            local total_csvs
-            total_csvs=$(echo "$sscsi_csvs" | wc -l | tr -d ' ')
-            
-            if [ "$total_csvs" -gt 0 ]; then
-                if [ "$force_flag" = "--force" ]; then
-                    # Force mode: delete one by one with progress bar
-                    local current=0
-                    while IFS= read -r csv; do
-                        if [ -n "$csv" ]; then
-                            current=$((current + 1))
-                            delete_csv_with_progress "$csv" "true" "$current" "$total_csvs"
-                        fi
-                    done <<< "$sscsi_csvs"
-                    printf "\r\033[K✅ Deleted %d CSVs (force mode)\n" "$total_csvs"
-                else
-                    # Normal mode: delete all at once
-                    printf "Deleting %d SSCSI CSVs... " "$total_csvs"
-                    if [ -n "$sscsi_csvs" ]; then
-                        # Convert newlines to spaces for oc delete command
-                        local csv_list=$(echo "$sscsi_csvs" | tr '\n' ' ')
-                        oc delete $csv_list --ignore-not-found=true --timeout=30s &>/dev/null || true
+        print_status "Deleting Secrets Store CSI Driver CSV in openshift-cluster-csi-drivers namespace..."
+        
+        # Get the CSV name in openshift-cluster-csi-drivers namespace
+        local csv_name
+        csv_name=$(oc get csv -n openshift-cluster-csi-drivers -o name | grep "secrets-store-csi-driver-operator" | head -1 | cut -d'/' -f2 2>/dev/null || true)
+        
+        if [ -n "$csv_name" ]; then
+            if [ "$force_flag" = "--force" ]; then
+                # Force mode: delete with progress indication
+                print_status "Deleting CSV $csv_name (force mode)..."
+                oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --force --grace-period=0 2>/dev/null || {
+                    # If still stuck, remove finalizers
+                    if oc get csv "$csv_name" -n openshift-cluster-csi-drivers &>/dev/null 2>&1; then
+                        force_delete_with_finalizers "csv" "openshift-cluster-csi-drivers" "$csv_name" &>/dev/null || true
                     fi
-                    printf "✅ Done\n"
-                fi
+                }
+                print_success "Deleted CSV $csv_name (force mode)"
             else
-                print_status "No SSCSI CSVs found to delete"
+                # Normal mode: simple delete
+                print_status "Deleting CSV $csv_name..."
+                oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --timeout=30s 2>/dev/null || {
+                    oc delete csv "$csv_name" -n openshift-cluster-csi-drivers --ignore-not-found=true --force --grace-period=0 2>/dev/null || true
+                    
+                    # If still exists, remove finalizers
+                    if oc get csv "$csv_name" -n openshift-cluster-csi-drivers &>/dev/null 2>&1; then
+                        force_delete_with_finalizers "csv" "openshift-cluster-csi-drivers" "$csv_name" &>/dev/null || true
+                    fi
+                }
+                print_success "Deleted CSV $csv_name"
             fi
         else
-            print_status "No SSCSI CSVs found to delete"
+            print_status "No SSCSI CSV found in openshift-cluster-csi-drivers namespace"
         fi
     fi
     
