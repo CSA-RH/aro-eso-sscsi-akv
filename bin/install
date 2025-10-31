@@ -218,12 +218,6 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if helm is available
-    if ! command -v helm &> /dev/null; then
-        print_error "helm command not found. Please install Helm."
-        exit 1
-    fi
-    
     # Check if envsubst is available
     if ! command -v envsubst &> /dev/null; then
         print_error "envsubst command not found. Please install gettext."
@@ -2333,10 +2327,6 @@ show_cleanup_status() {
     print_status "Checking Kubernetes resources..."
     echo "Namespaces:"
     oc get namespaces | grep -E "(secrets-store|external-secrets|hello-world)" || echo "  No relevant namespaces found"
-    
-    echo ""
-    echo "Helm releases:"
-    echo "  Azure provider installed via official OpenShift method (not Helm)"
     
     echo ""
     echo "ClusterServiceVersions (CSVs):"
